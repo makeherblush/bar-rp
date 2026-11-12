@@ -4,7 +4,6 @@ from datetime import datetime
 
 from aiogram import Bot, types
 from aiogram.types import BotCommand, BotCommandScopeChatMember
-from aiogram.enums import ParseMode
 
 import shared.database as db
 from shared.config import TOKEN_JULIAN, TOKEN_HANS, OWNER_ID, GROUP_ID
@@ -25,12 +24,13 @@ MAX_ACTIVE_PER_ROLE = {
     "dj": 1,
 }
 
+VIP_MENU_NONVIP_COST = 15  # Biaya jika tamu non-VIP memesan menu khusus VIP (VIP Gratis)
 TREAT_COST_VC = 20
 TREAT_CHARM_BONUS = 5
 DICE_MIN_BET = 10
 DICE_MAX_BET = 100
 
-# --- KATALOG MENU BAR & DAPUR ---
+# --- KATALOG MINUMAN REGULER (GRATIS) ---
 DRINKS_MENU = {
     "espresso": (
         "☕ <b>Velvet Double Espresso</b>",
@@ -74,6 +74,31 @@ DRINKS_MENU = {
     ),
 }
 
+# --- KATALOG MINUMAN EKSKLUSIF VIP (GRATIS VIP / 15 VC REGULER) ---
+VIP_DRINKS_MENU = {
+    "vip_dom": (
+        "🍾 <b>Dom Pérignon Vintage 2012 (Chilled Flute)</b>",
+        "<i>Julian membuka segel foil emas botol champagne vintage dengan dentuman halus, lalu menuangkan gelembung keemasan ke gelas flute kristal Baccarat.</i>\n\n"
+        "<b>\"Persembahan eksklusif dari gudang bawah tanah The Velvet Hour.\"</b>"
+    ),
+    "vip_blue": (
+        "🥃 <b>Johnnie Walker Blue Label (Crystal Decanter)</b>",
+        "<i>Dari decanter kristal berukir, Julian menuangkan blend langka beraroma madu hutan, hazelnut panggang, dan asap lembut ke gelas berukir emas.</i>\n\n"
+        "<b>\"Hanya satu dari sepuluh ribu tong kayu yang memiliki karakter sehalus ini.\"</b>"
+    ),
+    "vip_absinthe": (
+        "🧪 <b>Emerald La Fée Absinthe Ritual</b>",
+        "<i>Julian meletakkan sendok perak berlubang dengan kubus gula di atas gelas, lalu meneteskan air es perlahan hingga cairan hijau zamrud berubah keruh berkilau.</i>\n\n"
+        "<b>\"Ritual klasik malam Paris—aroma adas bintangnya akan memikat indramu.\"</b>"
+    ),
+    "vip_royal": (
+        "🍷 <b>Château Margaux Grand Cru (1996)</b>",
+        "<i>Julian menuangkan anggur merah tua yang telah didekantasi selama dua jam, menebarkan aroma blackcurrant, cedar, dan bunga violet di sekitar mejamu.</i>\n\n"
+        "<b>\"Sebuah mahakarya anggur merah untuk malam yang istimewa.\"</b>"
+    ),
+}
+
+# --- KATALOG MAKANAN REGULER (GRATIS) ---
 FOODS_MENU = {
     "fries": (
         "🍟 <b>Black Truffle Parmesan Fries</b>",
@@ -112,10 +137,34 @@ FOODS_MENU = {
     ),
 }
 
+# --- KATALOG MAKANAN EKSKLUSIF VIP (GRATIS VIP / 15 VC REGULER) ---
+VIP_FOODS_MENU = {
+    "vip_caviar": (
+        "🥄 <b>Imperial Beluga Caviar & Blini</b>",
+        "<i>Clara membawa mangkuk kristal berisi es serut dengan kaleng Beluga Caviar hitam berkilau, dilengkapi sendok mutiara, crème fraîche, dan blini hangat.</i>\n\n"
+        "<b>\"Hidangan pembuka paling prestisius di ruang VIP The Velvet Hour.\"</b>"
+    ),
+    "vip_lobster": (
+        "🦞 <b>Butter-Poached Maine Lobster Tail</b>",
+        "<i>Piring porselen berpinggir emas diletakkan di mejamu, menyajikan ekor lobster Maine lembut yang disiram saus mentega saffron dan perasan lemon Amalfi.</i>\n\n"
+        "<b>\"Manis alami daging lobster yang dimasak presisi oleh kepala koki kami.\"</b>"
+    ),
+    "vip_a5": (
+        "🥩 <b>Miyazaki A5 Wagyu Tenderloin (24K Gold Leaf)</b>",
+        "<i>Clara menyajikan potongan daging Miyazaki A5 dengan marbling sempurna yang dipanggang di atas arang binchotan dan dihiasi lembaran emas 24 karat.</i>\n\n"
+        "<b>\"Lumer seketika di lidah tanpa perlu banyak usaha.\"</b>"
+    ),
+    "vip_gold": (
+        "🍫 <b>Valrhona 24K Gold Truffle Fondant</b>",
+        "<i>Hidangan penutup cokelat Valrhona hangat dengan lelehan ganache truffle hitam di bagian tengah dan taburan serpihan emas murni di atasnya.</i>\n\n"
+        "<b>\"Penutup malam yang mewah khusus untuk tamu terhormat kami.\"</b>"
+    ),
+}
+
 # --- DAFTAR COMMAND DINAMIS PER PEKERJAAN ---
 BASE_GROUP_COMMANDS = [
-    BotCommand(command="order", description="Pesan minum — Contoh: /order negroni atau /order Matcha Latte"),
-    BotCommand(command="eat", description="Pesan makan — Contoh: /eat steak atau /eat Beef Lasagna"),
+    BotCommand(command="order", description="Buku menu minuman (Reguler & VIP) — Contoh: /order negroni"),
+    BotCommand(command="eat", description="Buku menu makanan (Reguler & VIP) — Contoh: /eat steak"),
     BotCommand(command="treat", description="Traktir tamu (20 VC, +5 Charm) — Contoh: /treat @clara negroni"),
     BotCommand(command="booth", description="Reservasi Private Booth VIP — Contoh: /booth Velvet Corner #1"),
     BotCommand(command="dice", description="Tantang dadu 1v1 — Contoh: /dice @alvaro 25"),
@@ -183,7 +232,6 @@ ROLE_GUIDES = {
 }
 
 async def ensure_julian_schema():
-    """Memastikan kolom shift harian, booth VIP, mutasi dompet, dan misi harian tersedia."""
     async with db.pool.acquire() as conn:
         await conn.execute("""
             ALTER TABLE users
@@ -228,14 +276,12 @@ async def ensure_julian_schema():
         await conn.execute("ALTER TABLE active_shifts ADD PRIMARY KEY (user_id);")
 
 async def log_wallet_tx(conn, user_id: int, amount: int, reason: str):
-    """Mencatat mutasi VC ke tabel riwayat dompet Hans."""
     await conn.execute(
         "INSERT INTO wallet_transactions (user_id, amount, reason, created_at) VALUES ($1, $2, $3, NOW())",
         user_id, amount, reason
     )
 
 async def add_bar_quest_progress(user_id: int):
-    """Menambah progres misi harian 'bar_social' (Interaksi di Meja Bar)."""
     today = datetime.utcnow().date()
     async with db.pool.acquire() as conn:
         await conn.execute("""
@@ -273,6 +319,11 @@ async def is_staff_or_owner(user_id: int) -> bool:
     async with db.pool.acquire() as conn:
         row = await conn.fetchrow("SELECT is_admin FROM users WHERE user_id = $1", user_id)
         return bool(row and row["is_admin"])
+
+async def is_vip_user(user_id: int) -> bool:
+    async with db.pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT is_vip, vip_until FROM users WHERE user_id = $1", user_id)
+        return bool(row and row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
 
 async def get_user_booth_tag(user_id: int) -> str:
     async with db.pool.acquire() as conn:
