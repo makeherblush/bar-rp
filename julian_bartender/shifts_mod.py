@@ -1,8 +1,7 @@
-import asyncio
 from datetime import datetime, timedelta
 
 from aiogram import Router, F, types
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.enums import ParseMode
 
 import shared.database as db
@@ -10,7 +9,7 @@ from shared.config import OWNER_ID, GROUP_ID, REQUIRED_CN_SYMBOL
 from julian_bartender.helpers import (
     bot, hans_bot, SHIFT_MAX_MINUTES, SHIFT_REQUIRED_ACTIONS, SHIFT_REWARD_VC,
     MAX_SHIFTS_PER_DAY, MAX_ACTIVE_PER_ROLE, ROLE_GUIDES,
-    update_member_shift_commands, schedule_delete, reply_and_autodelete,
+    update_member_shift_commands, reply_and_autodelete,
     is_staff_or_owner, log_wallet_tx
 )
 
@@ -30,8 +29,8 @@ async def add_shift_action(user_id: int) -> int:
 
 # --- LAMAR, CEK PROGRES & AKHIRI SHIFT ---
 @router.message(Command("apply"), F.chat.id == GROUP_ID)
-async def cmd_apply(message: types.Message):
-    role = message.text.replace("/apply", "").strip().lower()
+async def cmd_apply(message: types.Message, command: CommandObject):
+    role = (command.args or "").strip().lower()
     async with db.pool.acquire() as conn:
         counts_rows = await conn.fetch("SELECT role, COUNT(*) as cnt FROM active_shifts GROUP BY role")
         counts = {r["role"]: r["cnt"] for r in counts_rows}
@@ -165,11 +164,11 @@ async def cmd_endshift(message: types.Message):
 
 # --- AKSI STAF PARUH WAKTU ---
 @router.message(Command("mix"), F.chat.id == GROUP_ID)
-async def cmd_mix(message: types.Message):
+async def cmd_mix(message: types.Message, command: CommandObject):
     shift = await get_active_shift(message.from_user.id)
     if (not shift or shift["role"] != "bartender") and not await is_staff_or_owner(message.from_user.id):
         return await reply_and_autodelete(message, "Khusus staf <b>Bartender</b>. Contoh melamar: <code>/apply bartender</code>", 45)
-    drink = message.text.replace("/mix", "").strip()
+    drink = (command.args or "").strip()
     if not drink:
         return await reply_and_autodelete(message, "Tuliskan nama minuman yang ingin diracik.\nContoh: <code>/mix Midnight Negroni</code>", 45)
     cnt = await add_shift_action(message.from_user.id)
@@ -181,11 +180,11 @@ async def cmd_mix(message: types.Message):
     )
 
 @router.message(Command("sober"), F.chat.id == GROUP_ID)
-async def cmd_sober(message: types.Message):
+async def cmd_sober(message: types.Message, command: CommandObject):
     shift = await get_active_shift(message.from_user.id)
     if (not shift or shift["role"] != "bartender") and not await is_staff_or_owner(message.from_user.id):
         return await reply_and_autodelete(message, "Khusus staf <b>Bartender</b>. Contoh melamar: <code>/apply bartender</code>", 45)
-    target = message.text.replace("/sober", "").strip()
+    target = (command.args or "").strip()
     if not target and message.reply_to_message:
         target = message.reply_to_message.from_user.first_name
     if not target:
@@ -199,11 +198,11 @@ async def cmd_sober(message: types.Message):
     )
 
 @router.message(Command("welcome"), F.chat.id == GROUP_ID)
-async def cmd_welcome_staff(message: types.Message):
+async def cmd_welcome_staff(message: types.Message, command: CommandObject):
     shift = await get_active_shift(message.from_user.id)
     if (not shift or shift["role"] != "waiter") and not await is_staff_or_owner(message.from_user.id):
         return await reply_and_autodelete(message, "Khusus staf <b>Waiter</b>. Contoh melamar: <code>/apply waiter</code>", 45)
-    target = message.text.replace("/welcome", "").strip()
+    target = (command.args or "").strip()
     if not target and message.reply_to_message:
         target = message.reply_to_message.from_user.first_name
     if not target:
@@ -217,11 +216,11 @@ async def cmd_welcome_staff(message: types.Message):
     )
 
 @router.message(Command("dish"), F.chat.id == GROUP_ID)
-async def cmd_dish(message: types.Message):
+async def cmd_dish(message: types.Message, command: CommandObject):
     shift = await get_active_shift(message.from_user.id)
     if (not shift or shift["role"] != "waiter") and not await is_staff_or_owner(message.from_user.id):
         return await reply_and_autodelete(message, "Khusus staf <b>Waiter</b>. Contoh melamar: <code>/apply waiter</code>", 45)
-    dish_name = message.text.replace("/dish", "").strip()
+    dish_name = (command.args or "").strip()
     if not dish_name:
         return await reply_and_autodelete(message, "Tuliskan nama hidangan yang diantar.\nContoh: <code>/dish Wagyu Cube Bites</code>", 45)
     cnt = await add_shift_action(message.from_user.id)
