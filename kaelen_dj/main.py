@@ -1,4 +1,5 @@
 import os
+import random
 import asyncio
 import logging
 from datetime import datetime
@@ -29,7 +30,8 @@ assistant = Client(
     name="kaelen_assistant",
     api_id=API_ID,
     api_hash=API_HASH,
-    session_string=SESSION_STRING
+    session_string=SESSION_STRING,
+    in_memory=True
 )
 call_py = PyTgCalls(assistant)
 
@@ -41,21 +43,19 @@ current_local_file = None
 INLINE_MUSIC_BOTS = ["vkmusic_bot", "lybot", "DeezerMusicBot"]
 
 def _is_accurate_match(query: str, title: str, performer: str) -> bool:
-    """Memastikan judul dan nama penyanyi dari hasil pencarian sesuai dengan permintaan tamu"""
     combined = f"{title} {performer}".lower()
-    # Bersihkan tanda pemisah '-' agar kata kunci judul & penyanyi dicek semua
     keywords = [w.strip(" -–—()[]") for w in query.lower().split() if len(w.strip(" -–—()[]")) > 1]
     if not keywords:
         return True
     matched = sum(1 for kw in keywords if kw in combined)
     return (matched / len(keywords)) >= 0.7
 
-# --- PENCARIAN AKURAT (JUDUL + PENYANYI): 1. CEK GUDANG -> 2. TARIK DARI BOT INLINE ---
+# --- PENCARIAN AKURAT (JUDUL + PENYANYI) ---
 async def find_song_source(query: str, user_id: int):
     os.makedirs("downloads", exist_ok=True)
     clean_query = query.replace("-", " ").strip()
 
-    # 1. Cek di Channel Gudang Musik dengan pencocokan judul & penyanyi
+    # 1. Cek di Channel Gudang Musik
     if MUSIC_VAULT_ID != 0:
         try:
             async for msg in assistant.search_messages(MUSIC_VAULT_ID, query=clean_query, limit=10):
@@ -74,7 +74,7 @@ async def find_song_source(query: str, user_id: int):
                     )
                     if file_path and os.path.exists(file_path):
                         return {
-                            "title": f"{performer} - {title}" if performer and performer not in title else (title or query),
+                            "title": f"{performer} - {title}" if performer and performer.lower() not in title.lower() else (title or query),
                             "uploader": performer or "The Velvet Vault",
                             "duration": duration,
                             "stream_url": file_path,
@@ -83,7 +83,7 @@ async def find_song_source(query: str, user_id: int):
         except Exception as e:
             logging.warning(f"Gagal cek gudang musik: {e}")
 
-    # 2. Tarik dari Inline Bot (@vkmusic_bot dll) & pilih hasil yang judul + penyanyinya paling cocok
+    # 2. Tarik dari Inline Bot (@vkmusic_bot dll)
     target_chat = MUSIC_VAULT_ID if MUSIC_VAULT_ID != 0 else "me"
 
     for bot_username in INLINE_MUSIC_BOTS:
@@ -92,7 +92,6 @@ async def find_song_source(query: str, user_id: int):
             if not inline_res or not inline_res.results:
                 continue
 
-            # Cek 5 hasil teratas untuk mencari kecocokan Judul + Penyanyi yang paling pas
             chosen_result = inline_res.results[0]
             for res in inline_res.results[:5]:
                 res_title = getattr(res, "title", "") or ""
@@ -170,7 +169,7 @@ async def ensure_voice_chat_locked():
             await assistant.invoke(
                 functions.phone.CreateGroupCall(
                     peer=peer,
-                    random_id=assistant.rnd_id() // 2147483647,
+                    random_id=random.randint(1, 2147483647),
                     title="🎶 The Velvet Hour — Lounge Audio"
                 )
             )
@@ -245,6 +244,11 @@ async def play_next_song():
         )
     except Exception as e:
         logging.error(f"Gagal memutar stream: {e}")
+        await bot.send_message(
+            GROUP_ID,
+            f"⚠️ <i>Gagal memutar audio di Voice Chat: <code>{e}</code></i>",
+            parse_mode=ParseMode.HTML
+        )
         is_playing = False
         await play_next_song()
 
@@ -467,11 +471,17 @@ async def register_kaelen_commands():
     await bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
     await bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
 
-async def main():
+async def on_startup():
     await db.init_db()
     await register_kaelen_commands()
     await assistant.start()
+    # Muat semua dialog agar Pyrogram menyimpan access_hash grup & channel
+    async for _ in assistant.get_dialogs():
+        pass
     await call_py.start()
+
+async def main():
+    dp.startup.register(on_startup)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
