@@ -1,6 +1,5 @@
 import html
 from aiogram import Router, F, types
-from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -26,7 +25,7 @@ class ShopAddItemState(StatesGroup):
 class GiftState(StatesGroup):
     waiting_target = State()
 
-# --- LAPAK PARTNER (LIHAT & BELI ITEM DENGAN VC) ---
+# --- KATALOG LAPAK PARTNER (VISUAL & MUDAH) ---
 async def send_lapak_list(target_obj: types.Message | types.CallbackQuery):
     async with db.pool.acquire() as conn:
         shops = await conn.fetch("""
@@ -38,22 +37,30 @@ async def send_lapak_list(target_obj: types.Message | types.CallbackQuery):
         """)
 
     if not shops:
-        txt = "🏪 <i>Belum ada lapak partner yang terdaftar saat ini.</i>"
+        txt = (
+            "🏪 <b>POJOK LAPAK PARTNER — THE VELVET HOUR</b>\n\n"
+            "<i>Belum ada lapak partner yang terdaftar di sudut lounge saat ini.</i>"
+        )
         if isinstance(target_obj, types.CallbackQuery):
             return await target_obj.message.edit_text(txt, parse_mode=ParseMode.HTML, reply_markup=main_lobby_kb())
         return await target_obj.answer(txt, parse_mode=ParseMode.HTML, reply_markup=main_lobby_kb())
 
     buttons = []
     for s in shops:
+        owner_str = f" (@{s['owner_username']})" if s['owner_username'] else ""
         buttons.append([
             InlineKeyboardButton(
-                text=f"🏪 {s['shop_name']} ({s['cnt']} item)",
+                text=f"🛍️ {s['shop_name']}{owner_str} — [{s['cnt']} Item]",
                 callback_data=f"viewshop_{s['id']}"
             )
         ])
     buttons.append([InlineKeyboardButton(text="🏠 Kembali ke Lobi Utama", callback_data="back_lobby")])
 
-    txt = "🏪 <b>KATALOG LAPAK PARTNER — THE VELVET HOUR</b>\n\nPilih toko di bawah ini untuk melihat koleksi foto/stiker yang dijual:"
+    txt = (
+        "🏪 <b>GALERI ETALASE LAPAK PARTNER</b>\n\n"
+        "<i>Selamat datang di sudut galeri seni dan aksesori eksklusif The Velvet Hour.\n"
+        "Pilih salah satu toko di bawah untuk melihat koleksi foto dan stiker yang dipajang oleh para kreator partner:</i>"
+    )
     if isinstance(target_obj, types.CallbackQuery):
         await target_obj.message.edit_text(txt, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
     else:
@@ -80,26 +87,38 @@ async def cb_view_shop(call: types.CallbackQuery):
         )
 
     buttons = []
-    for it in items:
+    if items:
+        for it in items:
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"🖼️ {it['title']} — 💎 {it['price_vc']} VC",
+                    callback_data=f"previewitem_{it['id']}"
+                )
+            ])
+    else:
+        buttons.append([InlineKeyboardButton(text="✨ Etalase Toko Masih Kosong", callback_data="noop")])
+
+    # Jika yang membuka adalah pemilik toko, tampilkan tombol kelola
+    if shop["owner_id"] == user_id:
         buttons.append([
-            InlineKeyboardButton(
-                text=f"🖼️ {it['title']} — {it['price_vc']} VC",
-                callback_data=f"previewitem_{it['id']}"
-            )
+            InlineKeyboardButton(text="➕ Tambah Item Baru", callback_data=f"additem_{shop_id}"),
+            InlineKeyboardButton(text="🗑️ Hapus Item", callback_data=f"delitemmenu_{shop_id}")
         ])
 
-    if shop["owner_id"] == user_id:
-        buttons.append([InlineKeyboardButton(text="➕ Tambah Dagangan Baru", callback_data=f"additem_{shop_id}")])
-        buttons.append([InlineKeyboardButton(text="🗑️ Hapus Dagangan", callback_data=f"delitemmenu_{shop_id}")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Kembali ke Daftar Toko", callback_data="browse_lapak")])
 
-    buttons.append([InlineKeyboardButton(text="⬅️ Daftar Toko", callback_data="browse_lapak")])
-    await call.message.edit_text(
-        f"🏪 <b>{html.escape(shop['shop_name'])}</b>\n"
-        f"• <b>Pemilik:</b> @{html.escape(shop['owner_username'] or 'Partner')}\n\n"
-        "<i>Klik item di bawah untuk melihat pratinjau & membeli:</i>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    owner_display = f"@{shop['owner_username']}" if shop['owner_username'] else "Partner Kreator"
+    txt = (
+        f"🏛️ <b>ETALASE: {html.escape(shop['shop_name'])}</b>\n"
+        f"👤 <b>Pemilik Toko:</b> {html.escape(owner_display)}\n"
+        f"📦 <b>Stok Tersedia:</b> {len(items)} item\n\n"
+        f"<i>Klik salah satu item di bawah untuk melihat pratinjau foto/stiker serta langsung membelinya:</i>"
     )
+    await call.message.edit_text(txt, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+@router.callback_query(F.data == "noop")
+async def cb_noop(call: types.CallbackQuery):
+    await call.answer("Pemilik toko belum memajang item di etalase ini.", show_alert=True)
 
 @router.callback_query(F.data.startswith("previewitem_"))
 async def cb_preview_item(call: types.CallbackQuery):
@@ -108,13 +127,17 @@ async def cb_preview_item(call: types.CallbackQuery):
     async with db.pool.acquire() as conn:
         it = await conn.fetchrow("SELECT * FROM shop_items WHERE id = $1 AND is_sold = FALSE", item_id)
     if not it:
-        return await call.message.answer("Item sudah terjual atau dihapus.", reply_markup=main_lobby_kb())
+        return await call.message.answer("Maaf, item ini sudah terjual atau dihapus.", reply_markup=main_lobby_kb())
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"💳 Beli Sekarang ({it['price_vc']} VC)", callback_data=f"buyitem_{it['id']}")],
-        [InlineKeyboardButton(text="⬅️ Kembali ke Toko", callback_data=f"viewshop_{it['shop_id']}")]
+        [InlineKeyboardButton(text="⬅️ Kembali ke Etalase Toko", callback_data=f"viewshop_{it['shop_id']}")]
     ])
-    caption = f"🏷️ <b>{html.escape(it['title'])}</b>\n💰 <b>Harga:</b> {it['price_vc']} Velvet Coins"
+    caption = (
+        f"🏷️ <b>{html.escape(it['title'])}</b>\n"
+        f"💰 <b>Harga Resmi:</b> <b>{it['price_vc']} Velvet Coins</b>\n\n"
+        f"<i>Tekan tombol di bawah untuk mengonfirmasi pembelian. Saldo VC akan langsung ditransfer ke pemilik toko.</i>"
+    )
 
     if it["file_type"] == "sticker":
         await call.message.answer_sticker(it["file_id"])
@@ -131,16 +154,16 @@ async def cb_buy_item(call: types.CallbackQuery):
         async with conn.transaction():
             it = await conn.fetchrow("SELECT * FROM shop_items WHERE id = $1 AND is_sold = FALSE FOR UPDATE", item_id)
             if not it:
-                return await call.answer("Maaf, item ini baru saja terjual!", show_alert=True)
+                return await call.answer("Maaf, item ini baru saja dibeli orang lain!", show_alert=True)
 
             shop = await conn.fetchrow("SELECT * FROM partner_shops WHERE id = $1", it["shop_id"])
             if shop["owner_id"] == buyer.id:
-                return await call.answer("Kamu tidak bisa membeli daganganmu sendiri.", show_alert=True)
+                return await call.answer("Kamu tidak bisa membeli barang daganganmu sendiri.", show_alert=True)
 
             coins = await conn.fetchval("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", buyer.id)
             price = it["price_vc"]
             if (coins or 0) < price:
-                return await call.answer(f"Saldo tidak cukup! Butuh {price} VC.", show_alert=True)
+                return await call.answer(f"Saldo tidak cukup! Kamu butuh {price} VC.", show_alert=True)
 
             await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", price, buyer.id)
             await conn.execute("UPDATE users SET coins = coins + $1 WHERE user_id = $2", price, shop["owner_id"])
@@ -152,29 +175,30 @@ async def cb_buy_item(call: types.CallbackQuery):
     await call.answer("Pembelian berhasil!", show_alert=True)
     await call.message.answer(
         f"✅ <b>TRANSAKSI LAPAK BERHASIL!</b>\n\n"
-        f"Kamu membeli <b>{html.escape(it['title'])}</b> dari <b>{html.escape(shop['shop_name'])}</b> seharga <b>{price} VC</b>.",
+        f"Kamu berhasil membeli <b>{html.escape(it['title'])}</b> dari lapak <b>{html.escape(shop['shop_name'])}</b> seharga <b>{price} VC</b>.",
         parse_mode=ParseMode.HTML,
         reply_markup=main_lobby_kb()
     )
     try:
         await bot.send_message(
             shop["owner_id"],
-            f"💰 <b>DAGANGAN TERJUAL!</b>\n\n"
-            f"Item <b>{html.escape(it['title'])}</b> di lapak <b>{html.escape(shop['shop_name'])}</b> dibeli oleh "
-            f"<b>{html.escape(buyer.first_name)}</b>! Saldo <b>+{price} VC</b> telah masuk ke dompetmu.",
+            f"💰 <b>NOTIFIKASI PENJUALAN LAPAK!</b>\n\n"
+            f"Item <b>{html.escape(it['title'])}</b> di lapak <b>{html.escape(shop['shop_name'])}</b> telah dibeli oleh "
+            f"<b>{html.escape(buyer.first_name)}</b>!\n"
+            f"Pendapatan <b>+{price} VC</b> telah masuk ke dompetmu.",
             parse_mode=ParseMode.HTML
         )
     except Exception:
         pass
 
-# --- KELOLA DAGANGAN PEMILIK LAPAK ---
+# --- KELOLA DAGANGAN OLEH PEMILIK TOKO ---
 @router.callback_query(F.data.startswith("additem_"))
 async def cb_add_item_start(call: types.CallbackQuery, state: FSMContext):
     await call.answer()
     shop_id = int(call.data.split("_")[1])
     await state.update_data(shop_id=shop_id)
     await state.set_state(ShopAddItemState.waiting_media)
-    await call.message.answer("📤 Kirimkan <b>Foto</b> atau <b>Stiker</b> yang ingin dijual di lapakmu (atau ketik /cancel):")
+    await call.message.answer("📤 <b>TAMBAH PRODUK BARU</b>\n\nKirimkan <b>Foto</b> atau <b>Stiker</b> yang ingin kamu pajang di etalase lapakmu (atau ketik /cancel untuk batal):", parse_mode=ParseMode.HTML)
 
 @router.message(ShopAddItemState.waiting_media, F.chat.type == "private")
 async def fsm_item_media(message: types.Message, state: FSMContext):
@@ -187,10 +211,10 @@ async def fsm_item_media(message: types.Message, state: FSMContext):
     elif message.sticker:
         await state.update_data(file_id=message.sticker.file_id, file_type="sticker")
     else:
-        return await message.answer("Harap kirim berupa <b>Foto</b> atau <b>Stiker</b>.")
+        return await message.answer("Harap kirim berupa file <b>Foto</b> atau <b>Stiker</b> yang valid.")
 
     await state.set_state(ShopAddItemState.waiting_title)
-    await message.answer("📝 Masukkan <b>Nama / Judul Item</b> (Contoh: <i>Banner Vintage Couple</i>):")
+    await message.answer("📝 Masukkan <b>Nama / Judul Produk</b> (Contoh: <i>Banner Vintage Couple Edition #1</i>):", parse_mode=ParseMode.HTML)
 
 @router.message(ShopAddItemState.waiting_title, F.chat.type == "private")
 async def fsm_item_title(message: types.Message, state: FSMContext):
@@ -199,7 +223,7 @@ async def fsm_item_title(message: types.Message, state: FSMContext):
         return await message.answer("Dibatalkan.", reply_markup=main_lobby_kb())
     await state.update_data(title=message.text.strip()[:50])
     await state.set_state(ShopAddItemState.waiting_price)
-    await message.answer("💰 Masukkan <b>Harga dalam Velvet Coins (angka saja)</b> (Contoh: <code>75</code>):")
+    await message.answer("💰 Masukkan <b>Harga dalam Velvet Coins (angka saja)</b> (Contoh: <code>75</code>):", parse_mode=ParseMode.HTML)
 
 @router.message(ShopAddItemState.waiting_price, F.chat.type == "private")
 async def fsm_item_price(message: types.Message, state: FSMContext):
@@ -218,7 +242,7 @@ async def fsm_item_price(message: types.Message, state: FSMContext):
 
     await state.clear()
     await message.answer(
-        f"✅ Item <b>{html.escape(data['title'])}</b> ({price} VC) berhasil dipajang di lapak!",
+        f"✅ Produk <b>{html.escape(data['title'])}</b> ({price} VC) berhasil dipajang di etalase lapakmu!",
         parse_mode=ParseMode.HTML,
         reply_markup=main_lobby_kb()
     )
@@ -230,17 +254,17 @@ async def cb_del_item_menu(call: types.CallbackQuery):
     async with db.pool.acquire() as conn:
         items = await conn.fetch("SELECT id, title, price_vc FROM shop_items WHERE shop_id = $1 AND is_sold = FALSE", shop_id)
     if not items:
-        return await call.message.answer("Tidak ada item aktif untuk dihapus.")
+        return await call.message.answer("Tidak ada item aktif di lapakmu untuk dihapus.")
     buttons = [[InlineKeyboardButton(text=f"❌ Hapus: {i['title']} ({i['price_vc']} VC)", callback_data=f"rmitem_{i['id']}")] for i in items]
     buttons.append([InlineKeyboardButton(text="⬅️ Kembali", callback_data=f"viewshop_{shop_id}")])
-    await call.message.edit_text("Pilih item yang ingin dihapus:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await call.message.edit_text("🗑️ Pilih item yang ingin ditarik dari etalase:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @router.callback_query(F.data.startswith("rmitem_"))
 async def cb_rm_item(call: types.CallbackQuery):
     item_id = int(call.data.split("_")[1])
     async with db.pool.acquire() as conn:
         await conn.execute("DELETE FROM shop_items WHERE id = $1", item_id)
-    await call.answer("Item dihapus!", show_alert=True)
+    await call.answer("Item berhasil dihapus dari etalase!", show_alert=True)
     await send_lapak_list(call)
 
 # --- KIRIM GIFT KE TAMU LAIN ---
