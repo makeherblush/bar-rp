@@ -41,62 +41,79 @@ song_queue = deque()
 is_playing = False
 idle_leave_task = None
 
-# --- KONFIGURASI YT-DLP ---
+# --- KONFIGURASI YT-DLP (BEBAS BLOKIR IP CLOUD) ---
 YDL_OPTS_STREAM = {
     "format": "bestaudio/best",
     "noplaylist": True,
     "quiet": True,
     "no_warnings": True,
-    "default_search": "ytsearch1",
+    "extractor_args": {"youtube": {"player_client": ["android", "ios"]}},
 }
 
 def extract_song_info(query: str):
-    """Mencari lagu di YouTube dan mengambil direct stream URL (maksimal durasi 8 menit)"""
-    with yt_dlp.YoutubeDL(YDL_OPTS_STREAM) as ydl:
-        info = ydl.extract_info(query, download=False)
-        if "entries" in info:
-            if not info["entries"]:
-                return None
-            info = info["entries"][0]
+    """Mencari lagu via SoundCloud terlebih dahulu agar bebas blokir bot YouTube, lalu fallback ke YouTube"""
+    search_targets = [query] if query.startswith("http") else [f"scsearch1:{query}", f"ytsearch1:{query}"]
 
-        duration = info.get("duration", 0)
-        if duration > 480:
-            return "TOO_LONG"
+    for target in search_targets:
+        try:
+            with yt_dlp.YoutubeDL(YDL_OPTS_STREAM) as ydl:
+                info = ydl.extract_info(target, download=False)
+                if "entries" in info:
+                    if not info["entries"]:
+                        continue
+                    info = info["entries"][0]
 
-        return {
-            "title": info.get("title", "Unknown Track"),
-            "uploader": info.get("uploader", "Unknown Artist"),
-            "duration": duration,
-            "stream_url": info["url"],
-            "webpage_url": info.get("webpage_url", "")
-        }
+                duration = info.get("duration", 0)
+                if duration > 480:
+                    return "TOO_LONG"
+
+                return {
+                    "title": info.get("title", "Unknown Track"),
+                    "uploader": info.get("uploader", "Unknown Artist"),
+                    "duration": duration,
+                    "stream_url": info["url"],
+                    "webpage_url": info.get("webpage_url", "")
+                }
+        except Exception as e:
+            logging.warning(f"Gagal ambil dari {target}: {e}")
+            continue
+    return None
 
 def download_personal_mp3(query: str, user_id: int):
     """Mengunduh audio ringan untuk mode Personal Headphone"""
     os.makedirs("downloads", exist_ok=True)
     out_tmpl = f"downloads/{user_id}_%(id)s.%(ext)s"
     opts = {
-        "format": "bestaudio[ext=m4a]/bestaudio/best",
+        "format": "bestaudio/best",
         "outtmpl": out_tmpl,
         "noplaylist": True,
         "quiet": True,
-        "default_search": "ytsearch1",
+        "no_warnings": True,
+        "extractor_args": {"youtube": {"player_client": ["android", "ios"]}},
     }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(query, download=False)
-        if "entries" in info:
-            if not info["entries"]:
-                return None
-            info = info["entries"][0]
-        if info.get("duration", 0) > 480:
-            return "TOO_LONG"
-        filename = ydl.prepare_filename(info)
-        ydl.download([info["webpage_url"]])
-        return {
-            "file_path": filename,
-            "title": info.get("title", "Track"),
-            "uploader": info.get("uploader", "Artist")
-        }
+    search_targets = [query] if query.startswith("http") else [f"scsearch1:{query}", f"ytsearch1:{query}"]
+
+    for target in search_targets:
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(target, download=False)
+                if "entries" in info:
+                    if not info["entries"]:
+                        continue
+                    info = info["entries"][0]
+                if info.get("duration", 0) > 480:
+                    return "TOO_LONG"
+                filename = ydl.prepare_filename(info)
+                ydl.download([info["webpage_url"]])
+                return {
+                    "file_path": filename,
+                    "title": info.get("title", "Track"),
+                    "uploader": info.get("uploader", "Artist")
+                }
+        except Exception as e:
+            logging.warning(f"Gagal unduh dari {target}: {e}")
+            continue
+    return None
 
 # --- HELPER DATABASE & HAK AKSES ---
 async def is_staff_or_owner(user_id: int) -> bool:
@@ -248,7 +265,7 @@ async def cmd_reqsong(message: types.Message):
     info = await loop.run_in_executor(None, extract_song_info, query)
 
     if not info:
-        return await wait_msg.edit_text("Lagu tidak ditemukan. Coba gunakan judul dan nama penyanyi yang lebih spesifik.")
+        return await wait_msg.edit_text("Lagu tidak ditemukan atau server musik sedang sibuk. Coba judul/penyanyi lain.")
     if info == "TOO_LONG":
         return await wait_msg.edit_text("Durasi lagu terlalu panjang (maksimal 8 menit).")
 
@@ -368,7 +385,7 @@ async def cmd_myearphone(message: types.Message):
     result = await loop.run_in_executor(None, download_personal_mp3, query, user_id)
 
     if not result:
-        return await status_msg.edit_text("Lagu tidak ditemukan.")
+        return await status_msg.edit_text("Lagu tidak ditemukan atau gagal diunduh.")
     if result == "TOO_LONG":
         return await status_msg.edit_text("Durasi lagu maksimal 8 menit.")
 
