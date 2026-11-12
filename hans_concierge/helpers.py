@@ -39,6 +39,42 @@ DAILY_QUESTS = {
     },
 }
 
+async def is_staff_or_owner(user_id: int) -> bool:
+    if user_id == OWNER_ID:
+        return True
+    async with db.pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT is_admin FROM users WHERE user_id = $1", user_id)
+        return bool(row and row["is_admin"])
+
+async def main_lobby_kb(user_id: int) -> InlineKeyboardMarkup:
+    is_admin_or_owner = await is_staff_or_owner(user_id)
+    
+    rows = [
+        [InlineKeyboardButton(text="🚪 Verifikasi & Masuk ke Bar", callback_data="enter_bar")],
+        [
+            InlineKeyboardButton(text="💰 Dompet & Mutasi", callback_data="my_wallet"),
+            InlineKeyboardButton(text="📅 Absen Harian", callback_data="claim_daily"),
+        ],
+        [
+            InlineKeyboardButton(text="🎯 Misi Harian", callback_data="daily_quests"),
+            InlineKeyboardButton(text="🎟️ Undang Teman", callback_data="my_referral"),
+        ],
+        [
+            InlineKeyboardButton(text="🍾 Beli VIP Pass (24 Jam)", callback_data="buy_vip"),
+            InlineKeyboardButton(text="🏪 Pojok Lapak Partner", callback_data="browse_lapak"),
+        ],
+        [
+            InlineKeyboardButton(text="🎁 Kirim Gift / Hadiah", callback_data="menu_gift"),
+            InlineKeyboardButton(text="📖 Buku Panduan Bar", callback_data="info_menu"),
+        ]
+    ]
+    
+    # Tombol Admin khusus Owner & Staf Admin
+    if is_admin_or_owner:
+        rows.insert(0, [InlineKeyboardButton(text="🛡️ Panel Kontrol Admin / Owner", callback_data="open_admin_panel")])
+        
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+    
 async def ensure_hans_schema():
     """Memastikan tabel & kolom referral, misi harian, dan mutasi dompet tersedia."""
     async with db.pool.acquire() as conn:
