@@ -73,7 +73,10 @@ async def get_owned_shops(user_id: int):
     async with db.pool.acquire() as conn:
         if user_id == OWNER_ID:
             return await conn.fetch("SELECT id, shop_name, owner_id, owner_username FROM partner_shops ORDER BY id ASC")
-        return await conn.fetch("SELECT id, shop_name, owner_id, owner_username FROM partner_shops WHERE owner_id = $1 ORDER BY id ASC", user_id)
+        return await conn.fetch(
+            "SELECT id, shop_name, owner_id, owner_username FROM partner_shops WHERE owner_id = $1 ORDER BY id ASC",
+            user_id
+        )
 
 async def check_vip_status(user_id: int) -> bool:
     async with db.pool.acquire() as conn:
@@ -142,7 +145,7 @@ OPENING_TEXT = (
     "Lubang intip kecil di pintu itu bergeser terbuka, menampakkan tatapan tajam dari balik kegelapan.</i>\n\n"
     "<b>\"Selamat malam. Angin di luar cukup dingin, bukan? Saya Hans, penjaga pintu <i>The Velvet Hour</i>. "
     "Tempat ini tertutup untuk umum—hanya mereka yang tahu aturan main dan membawa kunci yang boleh melangkah masuk.\"</b>\n\n"
-    "<i>Silakan periksa Pusat Panduan jika baru pertama kali berkunjung, atau buktikan bahwa kamu memang tamu undangan kami.</i>"
+    "<i>Silakan tekan <b>📖 Pusat Panduan</b> jika baru pertama kali berkunjung, atau buktikan bahwa kamu memang tamu undangan kami.</i>"
 )
 
 @dp.message(CommandStart(), F.chat.type == "private")
@@ -166,13 +169,13 @@ async def cb_back_home(call: types.CallbackQuery, state: FSMContext):
     )
 
 # =====================================================================
-# --- PUSAT PANDUAN INTERAKTIF (MULTI-BUTTON & RAMAH PEMULA) ---
+# --- PUSAT PANDUAN INTERAKTIF (DENGAN CONTOH & FORMAT RAPI) ---
 # =====================================================================
 def info_hub_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🥂 Cara Bermain", callback_data="info_guide"),
-            InlineKeyboardButton(text="📜 Rules & Atribut", callback_data="info_rules")
+            InlineKeyboardButton(text="🥂 Cara Bermain & Masuk", callback_data="info_guide"),
+            InlineKeyboardButton(text="📜 Rules & Simbol CN", callback_data="info_rules")
         ],
         [
             InlineKeyboardButton(text="💎 Koin VC & Charm", callback_data="info_eco"),
@@ -180,11 +183,11 @@ def info_hub_kb():
         ],
         [
             InlineKeyboardButton(text="🍾 Keuntungan VIP", callback_data="info_vip"),
-            InlineKeyboardButton(text="🏪 Cara Beli di Lapak", callback_data="info_shops")
+            InlineKeyboardButton(text="🏪 Pojok Lapak Partner", callback_data="info_shops")
         ],
         [
-            InlineKeyboardButton(text="🍸 Command Bar", callback_data="info_cmd_bar"),
-            InlineKeyboardButton(text="🎧 Command Musik", callback_data="info_cmd_music")
+            InlineKeyboardButton(text="🍸 Command Bar & Sosial", callback_data="info_cmd_bar"),
+            InlineKeyboardButton(text="🎧 Command Musik & DJ", callback_data="info_cmd_music")
         ],
         [InlineKeyboardButton(text="🔙 Kembali ke Pintu Depan", callback_data="back_home")]
     ])
@@ -200,8 +203,8 @@ async def cb_info_hub(call: types.CallbackQuery):
     await call.answer()
     await call.message.edit_text(
         "📖 <b>PUSAT PANDUAN — THE VELVET HOUR</b>\n\n"
-        "<i>Hans menunjuk papan kayu berukir di sisi lorong yang memuat berbagai catatan penting bagi tamu.</i>\n\n"
-        "Pilih topik di bawah ini untuk membaca penjelasan singkat dan daftar perintahnya:",
+        "<i>Hans menunjuk papan kayu berukir di sisi lorong yang memuat catatan lengkap bagi setiap tamu.</i>\n\n"
+        "Pilih kategori di bawah ini untuk melihat penjelasan mudah beserta contoh penggunaan setiap command:",
         parse_mode=ParseMode.HTML,
         reply_markup=info_hub_kb()
     )
@@ -211,12 +214,15 @@ async def cb_info_guide(call: types.CallbackQuery):
     await call.answer()
     text = (
         "🥂 <b>PANDUAN BERKUNJUNG — THE VELVET HOUR</b>\n\n"
-        "<b>1. Sistem Berkunjung & Pulang:</b>\n"
-        "• Jika kamu diam tanpa chat selama <b>60 menit</b> (atau <b>120 menit</b> untuk VIP), Waitress Clara akan memberi peringatan, lalu Bouncer Hans akan mengantarmu pulang (<i>auto-kick</i>).\n"
-        "• Saldo koin dan koleksi hadiahmu tetap aman. Ketuk pintu ini lagi kapan pun kamu ingin mampir kembali.\n\n"
-        "<b>2. Interaksi di Ruang Utama:</b>\n"
-        "• Pesan minuman (<code>/order</code>), makanan (<code>/eat</code>), lagu (<code>/reqsong</code>), atau mainkan roulette (<code>/mystery</code>).\n"
-        "• Gunakan <code>/checkin</code> jika hanya menyimak obrolan, atau <code>/checkout</code> jika pamit pulang."
+        "<b>1. Cara Masuk ke Ruang Utama:</b>\n"
+        "• Gabung ke Channel Info dan Channel Promote resmi.\n"
+        "• Tekan tombol <b>🚪 Masuk ke Bar</b>, masukkan kata sandi dari Channel Info, lalu pasang simbol <code>🥂</code> di nama profil Telegram kamu.\n\n"
+        "<b>2. Aturan Waktu Nongkrong (Anti-Idle):</b>\n"
+        "• Jika kamu diam tanpa chat selama <b>60 menit</b> (atau <b>120 menit</b> untuk VIP), Waitress Clara akan memberi peringatan, lalu Bouncer Hans akan mengantarmu pulang.\n"
+        "• Saldo koin dan hadiahmu tetap aman. Kamu bisa masuk lagi kapan saja.\n\n"
+        "<b>3. Command Kehadiran:</b>\n"
+        "• <code>/checkin</code> — Memperbarui waktu santai jika kamu hanya menyimak obrolan.\n"
+        "• <code>/checkout</code> — Pamit keluar dari ruang bar secara sopan."
     )
     await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=back_info_kb())
 
@@ -226,12 +232,14 @@ async def cb_info_rules(call: types.CallbackQuery):
     text = (
         "📜 <b>ATURAN TAK TERTULIS THE VELVET HOUR</b>\n\n"
         "<b>1. Wajib Atribut Resmi (Dresscode):</b>\n"
-        f"• Selama di dalam bar, kamu <b>wajib</b> menyematkan simbol <b>{REQUIRED_CN_SYMBOL}</b> pada nama profil Telegram-mu (Contoh: <code>Alvaro {REQUIRED_CN_SYMBOL}</code>). Melepas atribut di dalam ruangan berakibat diantar keluar.\n\n"
-        "<b>2. Jaga Suasana Roleplay:</b>\n"
+        f"• Selama berada di dalam bar, wajib menyematkan simbol <b>{REQUIRED_CN_SYMBOL}</b> pada nama profil Telegram.\n"
+        f"• Contoh nama: <code>Alvaro {REQUIRED_CN_SYMBOL}</code>\n"
+        "• Melepas simbol saat di dalam grup akan otomatis diantar keluar oleh Hans.\n\n"
+        "<b>2. Suasana Roleplay & Voice Chat:</b>\n"
         "• Dilarang membawa drama OOC, ujaran kebencian, atau keributan.\n"
-        "• Obrolan suara (Voice Chat) khusus untuk mendengarkan musik lounge (mikrofon tamu dikunci).\n\n"
-        "<b>3. Anti-Spam:</b>\n"
-        "• Timer pasif hanya ter-reset oleh obrolan minimal 3 kata atau perintah RP."
+        "• Voice Chat khusus untuk mendengarkan musik lounge (mikrofon tamu dikunci).\n\n"
+        "<b>3. Sistem Poin Chat:</b>\n"
+        "• Obrolan minimal <b>3 kata</b> otomatis mereset timer anti-idle dan memberi <b>+1 VC</b>."
     )
     await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=back_info_kb())
 
@@ -240,14 +248,17 @@ async def cb_info_eco(call: types.CallbackQuery):
     await call.answer()
     text = (
         "💎 <b>VELVET COINS (VC) & CHARM POINTS</b>\n\n"
-        "<b>• Apa itu Velvet Coins (VC)?</b>\n"
-        "Mata uang resmi bar untuk memutar lagu di speaker grup, membeli VIP Pass, mengirim gift, dan jajan di <b>Pojok Lapak Partner</b>.\n\n"
-        "<b>• Sumber Koin:</b>\n"
-        "Modal awal 200 VC, Absen harian <code>/daily</code> (+30 VC), keaktifan chat RP (+1 VC/pesan), dan upah kerja paruh waktu (+120 VC).\n\n"
-        "<b>• Apa itu Charm Points?</b>\n"
-        "Poin pesona yang kamu dapatkan setiap kali <b>menerima Gift</b> dari tamu lain. Semakin tinggi Charm, semakin tinggi posisimu di <b>Hall of Fame</b>!\n\n"
-        "<b>• Penukaran Gift:</b>\n"
-        "Hadiah yang masuk ke tasmu bisa dicairkan menjadi koin (nilai tukar <b>50%</b>) di menu <i>Tas & VIP Pass</i>."
+        "<b>1. Apa itu Velvet Coins (VC)?</b>\n"
+        "Mata uang resmi di dalam bar untuk memutar lagu, membeli VIP Pass, mengirim gift, dan belanja di <b>Pojok Lapak Partner</b>.\n\n"
+        "<b>2. Cara Mendapatkan Koin VC:</b>\n"
+        "• Modal tamu baru: <b>+200 VC</b>\n"
+        "• Absen harian di PC Hans (<code>/daily</code>): <b>+30 VC/hari</b>\n"
+        "• Aktif chat RP di grup: <b>+1 VC</b> per pesan\n"
+        "• Kerja paruh waktu (<code>/apply</code>): <b>+120 VC</b> per shift\n\n"
+        "<b>3. Apa itu Charm Points?</b>\n"
+        "Poin popularitas yang didapat setiap kali kamu <b>menerima kiriman Gift</b> dari tamu lain. Peringkatnya tampil di <b>🏆 Hall of Fame</b>.\n\n"
+        "<b>4. Cairkan Gift:</b>\n"
+        "Hadiah yang kamu terima tersimpan di menu <b>🎒 Tas & VIP Pass</b> dan bisa ditukar menjadi koin VC sebesar <b>50%</b> dari harga belinya."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💳 Top Up Koin (Hubungi Owner)", url=f"https://t.me/{OWNER_USERNAME}")],
@@ -259,17 +270,28 @@ async def cb_info_eco(call: types.CallbackQuery):
 async def cb_info_jobs(call: types.CallbackQuery):
     await call.answer()
     text = (
-        "💼 <b>CARA KERJA PARUH WAKTU (GAJI 120 VC)</b>\n\n"
-        "Kamu <b>tidak perlu</b> menunggu 2 jam penuh untuk gajian! Angka 2 jam hanyalah batas waktu maksimal shift sebelum ditutup otomatis.\n\n"
-        "<b>Alur Singkat Mendapatkan Gaji:</b>\n"
-        "1. Ketik <code>/apply</code> di ruang utama untuk memilih posisi (<i>bartender, waiter, host,</i> atau <i>dj</i>).\n"
-        "2. Lakukan <b>minimal 5x aksi layanan</b> sesuai posisimu:\n"
-        "   • <b>🍸 Bartender:</b> <code>/mix</code>, <code>/sober</code>\n"
-        "   • <b>🍽️ Waiter:</b> <code>/welcome</code>, <code>/dish</code>\n"
-        "   • <b>🎩 Host:</b> <code>/ambience</code>, <code>/toastall</code>\n"
-        "   • <b>🎶 Resident DJ:</b> <code>/spinmusic</code>, <code>/dedicate</code>\n"
-        "3. Cek progres kapan saja lewat <code>/myshift</code>.\n"
-        "4. Begitu mencapai <b>5/5 layanan</b>, ketik <code>/endshift</code> — gaji <b>120 VC</b> langsung cair detik itu juga!"
+        "💼 <b>PANDUAN KERJA PARUH WAKTU (GAJI 120 VC)</b>\n\n"
+        "Kamu <b>tidak perlu menunggu 2 jam penuh</b> untuk gajian! Angka 2 jam hanyalah batas waktu maksimal shift sebelum ditutup otomatis.\n\n"
+        "<b>Langkah 1 — Lamar Posisi di Grup:</b>\n"
+        "• <code>/apply bartender</code> — Peracik minuman bar\n"
+        "• <code>/apply waiter</code> — Pelayan meja & dapur\n"
+        "• <code>/apply host</code> — Pemandu suasana lounge\n"
+        "• <code>/apply dj</code> — Pengendali musik ruangan\n\n"
+        "<b>Langkah 2 — Jalankan Minimal 5x Layanan (Sesuai Posisi):</b>\n"
+        "• <b>Bartender:</b>\n"
+        "  <code>/mix [Nama Minuman]</code> → Contoh: <code>/mix Blue Lagoon</code>\n"
+        "  <code>/sober [@username]</code> → Contoh: <code>/sober @alvaro</code>\n\n"
+        "• <b>Waiter:</b>\n"
+        "  <code>/welcome [@username]</code> → Contoh: <code>/welcome @clara</code>\n"
+        "  <code>/dish [Nama Makanan]</code> → Contoh: <code>/dish Wagyu Steak</code>\n\n"
+        "• <b>Host:</b>\n"
+        "  <code>/ambience</code> atau <code>/toastall</code> (tanpa tambahan teks)\n\n"
+        "• <b>Resident DJ:</b>\n"
+        "  <code>/spinmusic [Judul - Penyanyi]</code> → Contoh: <code>/spinmusic Sunsetz - CAS</code>\n"
+        "  <code>/dedicate [@user] [Judul - Penyanyi] | [Pesan]</code>\n\n"
+        "<b>Langkah 3 — Cek & Cairkan Gaji:</b>\n"
+        "• Ketik <code>/myshift</code> untuk melihat jumlah layananmu.\n"
+        "• Jika sudah <b>5/5 layanan</b>, ketik <code>/endshift</code> untuk langsung mencairkan <b>+120 VC</b>!"
     )
     await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=back_info_kb())
 
@@ -278,11 +300,11 @@ async def cb_info_vip(call: types.CallbackQuery):
     await call.answer()
     text = (
         f"🍾 <b>KEUNTUNGAN VIP PASS ({VIP_COST_24H} VC / 24 JAM)</b>\n\n"
-        "• <b>Gratis Request Lagu Sepuasnya:</b> Pakai <code>/reqsong</code> di ruang utama tanpa dipotong koin.\n"
-        "• <b>Spotlight Pin Promote:</b> Kartu promotemu otomatis di-pin di CH Promote + boleh melampirkan foto & teks hingga 800 karakter.\n"
-        "• <b>Promote Lebih Cepat:</b> Cooldown promote dipangkas dari 45 menit menjadi <b>30 menit</b>.\n"
-        "• <b>Waktu Santai 2x Lebih Lama:</b> Batas anti-idle diperpanjang dari 60 menit menjadi <b>120 menit</b>.\n"
-        "• <b>Lencana Eksklusif:</b> Tanda 🍾 muncul di daftar tamu lounge."
+        "• <b>Gratis Request Lagu:</b> Memakai <code>/reqsong</code> di ruang utama tanpa dipotong koin.\n\n"
+        "• <b>VIP Spotlight Pin Promote:</b> Kartu promotemu otomatis di-pin di atas CH Promote, bisa melampirkan foto, dan batas teks naik jadi 800 karakter.\n\n"
+        "• <b>Cooldown Promote Lebih Cepat:</b> Tunggu cukup <b>30 menit</b> (reguler 45 menit).\n\n"
+        "• <b>Batas Anti-Idle 2 Jam:</b> Waktu santai di bar diperpanjang menjadi <b>120 menit</b>.\n\n"
+        "• <b>Lencana Eksklusif:</b> Tanda 🍾 muncul di sebelah namamu pada daftar tamu."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎒 Buka Menu VIP Pass", callback_data="menu_inv")],
@@ -295,10 +317,11 @@ async def cb_info_shops(call: types.CallbackQuery):
     await call.answer()
     text = (
         "🏪 <b>POJOK LAPAK PARTNER (TRANSAKSI PAKAI VC)</b>\n\n"
-        "Area khusus bagi rekan/partner resmi <i>The Velvet Hour</i> untuk memajang katalog koleksi mereka (seperti ikan cupang, jasa, atau item koleksi lainnya).\n\n"
-        "• Buka tombol <b>🏪 Pojok Lapak Partner</b> untuk melihat daftar toko yang buka.\n"
-        "• Pilih produk untuk melihat stiker/foto dan deskripsinya.\n"
-        "• Klik <b>Beli Sekarang</b> untuk membayar langsung memakai <b>Velvet Coins (VC)</b> dan terhubung ke chat pemilik toko."
+        "Area khusus bagi rekan resmi <i>The Velvet Hour</i> untuk memajang koleksi mereka (ikan cupang, jasa, atau item koleksi).\n\n"
+        "<b>Cara Melihat & Membeli:</b>\n"
+        "• Di Grup: Ketik <code>/lapak</code> untuk melihat daftar barang yang tersedia.\n"
+        "• Di PC Hans: Tekan tombol <b>🏪 Pojok Lapak Partner</b> → pilih nama lapak → pilih item untuk melihat stiker/foto dan klik <b>Beli Sekarang</b>.\n\n"
+        "<i>Saldo VC akan otomatis berpindah ke pemilik toko dan kamu langsung mendapat tombol chat ke seller.</i>"
     )
     await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=back_info_kb())
 
@@ -306,16 +329,22 @@ async def cb_info_shops(call: types.CallbackQuery):
 async def cb_info_cmd_bar(call: types.CallbackQuery):
     await call.answer()
     text = (
-        "🍸 <b>COMMAND TAMU DI RUANG UTAMA (GRUP)</b>\n\n"
-        "• <code>/order</code> — Buka buku menu minuman & pesan ke Julian\n"
-        "• <code>/eat</code> — Buka buku menu makanan & pesan ke Clara\n"
-        "• <code>/bill</code> — Cek saldo VC, status VIP, dan Charm Points\n"
-        "• <code>/mystery</code> — Putar Bar Roulette (40 VC)\n"
-        "• <code>/toast @username</code> — Ajak bersulang tamu lain\n"
-        "• <code>/guests</code> — Lihat daftar tamu di dalam lounge\n"
-        "• <code>/topcharm</code> — Lihat papan peringkat Charm di grup\n"
-        "• <code>/checkin</code> — Perbarui timer santai (anti-idle)\n"
-        "• <code>/checkout</code> — Pamit keluar dari ruang bar"
+        "🍸 <b>COMMAND TAMU DI GRUP (DENGAN CONTOH)</b>\n\n"
+        "• <code>/order</code> atau <code>/order [nama minuman]</code>\n"
+        "  Buka buku menu minuman atau pesan racikan bebas.\n"
+        "  Contoh: <code>/order negroni</code> atau <code>/order Matcha Latte</code>\n\n"
+        "• <code>/eat</code> atau <code>/eat [nama makanan]</code>\n"
+        "  Buka buku menu dapur atau pesan hidangan bebas.\n"
+        "  Contoh: <code>/eat steak</code> atau <code>/eat Croissant Cokelat</code>\n\n"
+        "• <code>/toast [@username / nama]</code>\n"
+        "  Mengajak bersulang tamu lain di lounge.\n"
+        "  Contoh: <code>/toast @alvaro</code>\n\n"
+        "• <code>/mystery</code>\n"
+        "  Memutar Bar Roulette (40 VC) berhadiah koin atau Truth/Dare.\n\n"
+        "• <code>/bill</code> — Cek saldo VC, Charm, dan masa aktif VIP kamu.\n"
+        "• <code>/guests</code> — Lihat siapa saja yang sedang ada di dalam bar.\n"
+        "• <code>/topcharm</code> — Lihat peringkat Charm Points di grup.\n"
+        "• <code>/lapak</code> — Lihat katalog toko partner yang buka."
     )
     await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=back_info_kb())
 
@@ -323,17 +352,23 @@ async def cb_info_cmd_bar(call: types.CallbackQuery):
 async def cb_info_cmd_music(call: types.CallbackQuery):
     await call.answer()
     text = (
-        "🎧 <b>COMMAND MUSIK & KURATOR KAELEN</b>\n\n"
-        "<b>Untuk Semua Tamu:</b>\n"
-        "• <code>/reqsong Judul Lagu - Penyanyi</code>\n"
-        "  Putar lagu di Obrolan Suara grup (15 VC, gratis untuk VIP & DJ).\n"
-        "• <code>/myearphone Judul Lagu - Penyanyi</code>\n"
-        "  Kirim file lagu MP3 langsung ke chat pribadimu.\n\n"
-        "<b>Khusus Staf Shift Resident DJ & Staff:</b>\n"
-        "• <code>/spinmusic Judul - Penyanyi</code> — Putar lagu prioritas #1\n"
-        "• <code>/dedicate @user Judul - Penyanyi | Pesan</code> — Lagu dedikasi\n"
-        "• <code>/skip</code> — Lewati lagu yang sedang diputar\n"
-        "• <code>/stopmusic</code> — Hentikan musik & bersihkan antrean"
+        "🎧 <b>COMMAND MUSIK & KURATOR KAELEN (DENGAN CONTOH)</b>\n\n"
+        "<b>1. Untuk Semua Tamu:</b>\n"
+        "• <code>/reqsong [Judul Lagu - Nama Penyanyi]</code>\n"
+        "  Memutar lagu di Obrolan Suara grup (15 VC, gratis untuk VIP & DJ).\n"
+        "  Contoh: <code>/reqsong Apocalypse - Cigarettes After Sex</code>\n\n"
+        "• <code>/myearphone [Judul Lagu - Nama Penyanyi]</code>\n"
+        "  Mengirimkan file lagu MP3 langsung ke chat pribadimu.\n"
+        "  Contoh: <code>/myearphone Sunsetz - Cigarettes After Sex</code>\n\n"
+        "<b>2. Khusus Staf Shift Resident DJ & Admin:</b>\n"
+        "• <code>/spinmusic [Judul Lagu - Penyanyi]</code>\n"
+        "  Menyelipkan lagu ke antrean teratas (#1).\n"
+        "  Contoh: <code>/spinmusic Numb - Linkin Park</code>\n\n"
+        "• <code>/dedicate [@user] [Judul - Penyanyi] | [Pesan]</code>\n"
+        "  Memutar lagu spesial disertai pesan dedikasi.\n"
+        "  Contoh: <code>/dedicate @clara Perfect - Ed Sheeran | Buat kamu</code>\n\n"
+        "• <code>/skip</code> — Melewati lagu yang sedang diputar.\n"
+        "• <code>/stopmusic</code> — Menghentikan musik & mengosongkan antrean."
     )
     await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=back_info_kb())
 
@@ -530,7 +565,6 @@ async def cb_buy_shop_item(call: types.CallbackQuery):
             if not buyer_coins or buyer_coins < item["price_vc"]:
                 return await call.answer(f"Saldo VC tidak cukup (butuh {item['price_vc']} VC).", show_alert=True)
 
-            # Potong saldo pembeli & kirim ke pemilik toko
             await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", item["price_vc"], buyer.id)
             await conn.execute("""
                 INSERT INTO users (user_id, username, full_name, coins)
@@ -542,7 +576,6 @@ async def cb_buy_shop_item(call: types.CallbackQuery):
 
     await call.answer("Pembelian berhasil!")
 
-    # Kirim notifikasi DM ke pemilik toko
     try:
         buyer_tag = f"@{buyer.username}" if buyer.username else f"<a href='tg://user?id={buyer.id}'>{buyer.first_name}</a>"
         await bot.send_message(
@@ -742,7 +775,7 @@ async def cb_shop_announce(call: types.CallbackQuery):
             f"🏪 <b>RESTOCK ALERT — {shop['shop_name']}!</b>\n\n"
             f"<i>Bartender Julian menyalakan lampu sorot ke arah etalase <b>{shop['shop_name']}</b> di sudut lounge. "
             "Koleksi terbaru baru saja dipajang!</i>\n\n"
-            "Buka <b>Private Chat Hans</b> $\\rightarrow$ pilih <b>Pojok Lapak Partner</b> untuk melihat katalog dan membelinya dengan <b>Velvet Coins (VC)</b>.",
+            "Ketik <code>/lapak</code> di sini atau buka <b>Private Chat Hans</b> untuk melihat stiker/foto dan membelinya dengan <b>Velvet Coins (VC)</b>.",
             parse_mode=ParseMode.HTML
         )
         await call.answer("Pengumuman restock berhasil dikirim ke ruang utama!", show_alert=True)
@@ -805,7 +838,7 @@ async def process_gate_password(message: types.Message, state: FSMContext):
 
     if message.text.strip().upper() != (real_pass or "VELVET").upper():
         return await message.answer(
-            "<i>Hans menggeleng dingin dari balik lubang intip.</i>\n"
+            "<i>Hans menggeleng dingin dari balik lubang intip.</i>\n\n"
             "<b>\"Kata sandi salah. Periksa kembali papan informasi kami dan coba lagi.\"</b>",
             parse_mode=ParseMode.HTML
         )
