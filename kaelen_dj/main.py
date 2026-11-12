@@ -5,13 +5,14 @@ from datetime import datetime
 from collections import deque
 
 from aiogram import Bot, Dispatcher, F, types
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandStart
+from aiogram.types import BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats
 from aiogram.enums import ParseMode
 
 from pyrogram import Client
 from pyrogram.raw import functions
-from pytgcalls import PyTgCalls
-from pytgcalls.types import MediaStream, AudioQuality
+from pytgcalls import PyTgCalls, filters
+from pytgcalls.types import MediaStream, AudioQuality, StreamEnded
 import yt_dlp
 
 import shared.database as db
@@ -59,7 +60,7 @@ def extract_song_info(query: str):
             info = info["entries"][0]
 
         duration = info.get("duration", 0)
-        if duration > 480: # Batas maksimal 8 menit (480 detik) agar server tidak berat
+        if duration > 480:
             return "TOO_LONG"
 
         return {
@@ -128,7 +129,6 @@ async def ensure_voice_chat_locked():
         call = full_chat.full_chat.call
 
         if not call:
-            # Buat Voice Chat baru
             await assistant.invoke(
                 functions.phone.CreateGroupCall(
                     peer=peer,
@@ -140,7 +140,6 @@ async def ensure_voice_chat_locked():
             full_chat = await assistant.invoke(functions.channels.GetFullChannel(channel=peer))
             call = full_chat.full_chat.call
 
-        # Kunci mikrofon seluruh peserta baru (Mode Pendengar Saja)
         if call:
             await assistant.invoke(
                 functions.phone.ToggleGroupCallSettings(
@@ -205,11 +204,20 @@ async def play_next_song():
         is_playing = False
         await play_next_song()
 
-# Event otomatis saat lagu selesai diputar
-@call_py.on_stream_end()
-async def on_stream_end_handler(_, update):
+@call_py.on_update(filters.stream_end())
+async def on_stream_end_handler(_, update: StreamEnded):
     if update.chat_id == GROUP_ID:
         await play_next_song()
+
+# --- START DI PRIVATE CHAT ---
+@dp.message(CommandStart(), F.chat.type == "private")
+async def cmd_start_kaelen(message: types.Message):
+    await message.answer(
+        "🎧 <i>Jarum piringan hitam berputar perlahan di sudut ruangan...</i>\n\n"
+        "<b>\"Selamat malam. Saya Kaelen, kurator musik di <i>The Velvet Hour</i>. "
+        "Gunakan perintah <code>/myearphone judul lagu</code> di sini untuk mendengarkan musik secara pribadi.\"</b>",
+        parse_mode=ParseMode.HTML
+    )
 
 # --- COMMAND MUSIK DI GRUP ---
 @dp.message(Command("reqsong"), F.chat.id == GROUP_ID)
@@ -276,7 +284,7 @@ async def cmd_spinmusic(message: types.Message):
         return await wait_msg.edit_text("Gagal memuat lagu (tidak ditemukan atau > 8 menit).")
 
     info["requester"] = f"Resident DJ {message.from_user.first_name}"
-    song_queue.appendleft(info) # Masuk urutan paling depan (priority)
+    song_queue.appendleft(info)
     await add_dj_shift_action(user_id)
 
     await wait_msg.delete()
@@ -291,7 +299,6 @@ async def cmd_dedicate(message: types.Message):
     if not await is_active_dj(user_id) and not await is_staff_or_owner(user_id):
         return
 
-    # Format: /dedicate @target Judul Lagu - Penyanyi | Pesan dedikasi
     raw = message.text.replace("/dedicate", "").strip()
     if "|" not in raw or len(raw.split()) < 3:
         return await message.reply(
@@ -387,16 +394,33 @@ async def cmd_myearphone(message: types.Message):
             await status_msg.delete()
     except Exception:
         await status_msg.edit_text(
-            "Gagal mengirim lagu ke PC-mu. Pastikan kamu sudah menekan <b>/start</b> di bot @KaelenThorneVH_bot terlebih dahulu!",
+            "Gagal mengirim lagu ke PC-mu. Pastikan kamu sudah menekan <b>/start</b> di bot ini terlebih dahulu!",
             parse_mode=ParseMode.HTML
         )
     finally:
-        # Hapus file lokal agar storage Railway tidak penuh
         if isinstance(result, dict) and os.path.exists(result["file_path"]):
             os.remove(result["file_path"])
 
+# --- REGISTER MENU COMMAND (/) DI KEYBOARD GRUP & PC ---
+async def register_kaelen_commands():
+    group_cmds = [
+        BotCommand(command="reqsong", description="Putar lagu di Voice Chat Lounge (15 VC / Gratis VIP)"),
+        BotCommand(command="myearphone", description="Kirim lagu pribadi (MP3) ke Private Chat"),
+        BotCommand(command="spinmusic", description="[Resident DJ] Putar lagu prioritas antrean teratas"),
+        BotCommand(command="dedicate", description="[Resident DJ] Dedikasikan lagu untuk tamu tertentu"),
+        BotCommand(command="skip", description="[Resident DJ] Lewati lagu yang sedang diputar"),
+        BotCommand(command="stopmusic", description="[Resident DJ] Hentikan musik & bersihkan antrean"),
+    ]
+    private_cmds = [
+        BotCommand(command="start", description="Mulai sesi dengan kurator musik Kaelen"),
+        BotCommand(command="myearphone", description="Dengarkan lagu secara pribadi di sini"),
+    ]
+    await bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
+    await bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
+
 async def main():
     await db.init_db()
+    await register_kaelen_commands()
     await assistant.start()
     await call_py.start()
     await dp.start_polling(bot)
