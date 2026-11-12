@@ -95,10 +95,10 @@ async def cmd_lapak_group(message: types.Message):
     if not shops:
         return await reply_and_autodelete(message, "🏪 <i>Belum ada lapak partner yang buka di sudut lounge saat ini.</i>", 60)
 
-    lines = [
-        f"• <b>{s['shop_name']}</b>{f' (@{s[\"owner_username\"]})' if s['owner_username'] else ''} — <i>{s['active_items']} item tersedia</i>"
-        for s in shops
-    ]
+    lines = []
+    for s in shops:
+        owner_tag = f" (@{s['owner_username']})" if s["owner_username"] else ""
+        lines.append(f"• <b>{s['shop_name']}</b>{owner_tag} — <i>{s['active_items']} item tersedia</i>")
 
     hans_me = await hans_bot.get_me()
     kb = InlineKeyboardMarkup(inline_keyboard=[
