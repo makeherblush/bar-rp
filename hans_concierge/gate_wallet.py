@@ -194,7 +194,7 @@ async def cb_claim_daily(call: types.CallbackQuery):
     res = await _process_daily_claim(call.from_user.id, call.from_user.first_name)
     await call.message.edit_text(res, parse_mode=ParseMode.HTML, reply_markup=main_lobby_kb())
 
-# --- FITUR BARU: MISI HARIAN (/quests & TOMBOL) ---
+# --- MISI HARIAN (/quests & TOMBOL) ---
 @router.callback_query(F.data == "daily_quests")
 async def cb_daily_quests(call: types.CallbackQuery):
     await call.answer()
@@ -267,7 +267,7 @@ async def cb_claim_quest(call: types.CallbackQuery):
     await call.answer(f"Berhasil klaim +{reward} VC!", show_alert=True)
     await cb_daily_quests(call)
 
-# --- FITUR BARU: KODE REFERRAL / UNDANG TEMAN ---
+# --- KODE REFERRAL / UNDANG TEMAN ---
 @router.callback_query(F.data == "my_referral")
 async def cb_my_referral(call: types.CallbackQuery):
     await call.answer()
@@ -323,7 +323,7 @@ async def cb_buy_vip(call: types.CallbackQuery):
         reply_markup=main_lobby_kb()
     )
 
-# --- MENU PANDUAN & COMMAND LENGKAP (AUTO-UPDATED UNTUK SEMUA BOT) ---
+# --- MENU PANDUAN & COMMAND LENGKAP ---
 @router.callback_query(F.data == "info_menu")
 async def cb_info_menu(call: types.CallbackQuery):
     await call.answer()
@@ -361,7 +361,8 @@ async def cb_info_cmd_music(call: types.CallbackQuery):
         "• <code>/reqsong Judul Lagu - Nama Penyanyi</code>\n"
         "  Memutar lagu di Obrolan Suara grup (<b>10 VC</b>, gratis untuk VIP & DJ).\n"
         "  Contoh: <code>/reqsong Apocalypse - Cigarettes After Sex</code>\n\n"
-        "• <code>/queue</code> — Melihat lagu yang sedang diputar beserta daftar antrean jukebox.\n\n"
+        "• <code>/nowplaying</code> — Melihat detail lagu yang sedang diputar beserta durasinya.\n"
+        "• <code>/queue</code> — Melihat daftar antrean lagu jukebox berikutnya.\n"
         "• <code>/voteskip</code> — Voting bersama tamu lain (butuh <b>3 suara</b>) untuk melewati lagu.\n\n"
         "• <code>/myearphone Judul Lagu - Nama Penyanyi</code>\n"
         "  Mengirim file MP3 lagu langsung ke Private Chat kamu (Gratis).\n\n"
