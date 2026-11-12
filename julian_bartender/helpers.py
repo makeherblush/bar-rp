@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 
 from aiogram import Bot, types
+from aiogram.enums import ParseMode
 from aiogram.types import BotCommand, BotCommandScopeChatMember
 
 import shared.database as db
