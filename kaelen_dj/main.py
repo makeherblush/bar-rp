@@ -12,7 +12,7 @@ from aiogram.enums import ParseMode
 from pyrogram import Client
 from pyrogram.raw import functions
 from pytgcalls import PyTgCalls, filters
-from pytgcalls.types import MediaStream, AudioQuality, StreamEnded
+from pytgcalls.types import MediaStream, AudioQuality
 import yt_dlp
 
 import shared.database as db
@@ -205,7 +205,7 @@ async def play_next_song():
         await play_next_song()
 
 @call_py.on_update(filters.stream_end())
-async def on_stream_end_handler(_, update: StreamEnded):
+async def on_stream_end_handler(_, update):
     if update.chat_id == GROUP_ID:
         await play_next_song()
 
