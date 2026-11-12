@@ -204,7 +204,7 @@ async def play_next_song():
         is_playing = False
         await play_next_song()
 
-@call_py.on_update(filters.stream_end())
+@call_py.on_update(filters.stream_end)
 async def on_stream_end_handler(_, update):
     if update.chat_id == GROUP_ID:
         await play_next_song()
