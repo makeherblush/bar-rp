@@ -1,5 +1,8 @@
 import os
 
+# --- DATABASE POSTGRESQL ---
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+
 # --- TOKEN KETIGA BOT ---
 TOKEN_HANS = os.getenv("TOKEN_HANS", "")
 TOKEN_JULIAN = os.getenv("TOKEN_JULIAN", "")
@@ -22,11 +25,10 @@ WELCOME_BONUS = int(os.getenv("WELCOME_BONUS", 200))
 DAILY_COIN = int(os.getenv("DAILY_COIN", 30))
 VIP_COST_24H = int(os.getenv("VIP_COST_24H", 300))
 
-PROMOTE_CD_REG = int(os.getenv("PROMOTE_CD_REG", 45))  # Cooldown promote reguler (menit)
-PROMOTE_CD_VIP = int(os.getenv("PROMOTE_CD_VIP", 30))  # Cooldown promote VIP (menit)
+PROMOTE_CD_REG = int(os.getenv("PROMOTE_CD_REG", 45))
+PROMOTE_CD_VIP = int(os.getenv("PROMOTE_CD_VIP", 30))
 
 # --- KATALOG HADIAH BAR BOUTIQUE ---
-# Format: "kode": ("Nama Gift", harga_beli, nilai_cair_50%, poin_charm)
 GIFTS_CATALOG = {
     "rose": ("🌹 Velvet Rose", 50, 25, 10),
     "negroni": ("🍸 Classic Negroni", 100, 50, 25),
