@@ -7,7 +7,6 @@ async def init_db():
     global pool
     pool = await asyncpg.create_pool(DATABASE_URL)
     async with pool.acquire() as conn:
-        # Tabel Utama Tamu & Ekonomi
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
@@ -18,7 +17,9 @@ async def init_db():
                 is_vip BOOLEAN DEFAULT FALSE,
                 vip_until TIMESTAMP,
                 is_admin BOOLEAN DEFAULT FALSE,
+                is_patron BOOLEAN DEFAULT FALSE,
                 is_in_bar BOOLEAN DEFAULT FALSE,
+                got_welcome BOOLEAN DEFAULT FALSE,
                 last_active TIMESTAMP DEFAULT NOW(),
                 warned_idle BOOLEAN DEFAULT FALSE,
                 last_promote TIMESTAMP,
@@ -27,7 +28,6 @@ async def init_db():
                 total_active_mins INT DEFAULT 0
             );
         """)
-        # Tabel Pengaturan Bar (Password Pintu, Status Buka/Tutup)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS bar_settings (
                 key TEXT PRIMARY KEY,
@@ -36,10 +36,9 @@ async def init_db():
         """)
         await conn.execute("""
             INSERT INTO bar_settings (key, value) 
-            VALUES ('door_password', 'VELVET26'), ('bar_open', 'true')
+            VALUES ('door_password', 'VELVET26'), ('bar_open', 'true'), ('current_pin_id', '0')
             ON CONFLICT (key) DO NOTHING;
         """)
-        # Tabel Tas Koleksi Gift
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS inventory (
                 id SERIAL PRIMARY KEY,
@@ -50,7 +49,6 @@ async def init_db():
                 received_at TIMESTAMP DEFAULT NOW()
             );
         """)
-        # Tabel Staf Paruh Waktu (Shift)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS active_shifts (
                 role TEXT PRIMARY KEY,
