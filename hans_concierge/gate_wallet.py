@@ -338,21 +338,20 @@ async def cb_info_menu(call: types.CallbackQuery):
 async def cb_info_cmd_bar(call: types.CallbackQuery):
     await call.answer()
     text = (
-        "🥂 <b>COMMAND BAR, BOOTH & MINI-GAME (JULIAN)</b>\n\n"
-        "• <code>/order [nama minuman]</code> — Pesan minuman di bar.\n"
-        "  Contoh: <code>/order negroni</code> atau <code>/order Iced Matcha Latte</code>\n\n"
-        "• <code>/eat [nama makanan]</code> — Pesan hidangan dari dapur.\n"
-        "  Contoh: <code>/eat steak</code> atau <code>/eat Beef Lasagna</code>\n\n"
+        "🥂 <b>COMMAND BAR, MENU VIP, BOOTH & MINI-GAME (JULIAN)</b>\n\n"
+        "• <code>/order [nama minuman]</code> — Lihat & pesan minuman:\n"
+        "  - <b>Reguler (Gratis):</b> <code>espresso</code>, <code>latte</code>, <code>negroni</code>, <code>whisky</code>, <code>mojito</code>, <code>mocktail</code>, <code>tea</code>, <code>water</code>, atau custom bebas.\n"
+        "  - <b>Eksklusif VIP (Gratis VIP / 15 VC):</b> <code>vip_dom</code>, <code>vip_blue</code>, <code>vip_absinthe</code>, <code>vip_royal</code>.\n\n"
+        "• <code>/eat [nama makanan]</code> — Lihat & pesan hidangan dapur:\n"
+        "  - <b>Reguler (Gratis):</b> <code>fries</code>, <code>steak</code>, <code>pasta</code>, <code>croissant</code>, <code>platter</code>, <code>cake</code>, <code>tiramisu</code>, atau custom bebas.\n"
+        "  - <b>Eksklusif VIP (Gratis VIP / 15 VC):</b> <code>vip_caviar</code>, <code>vip_lobster</code>, <code>vip_a5</code>, <code>vip_gold</code>.\n\n"
         "• <code>/treat @username [menu]</code> — Traktir tamu lain (<b>20 VC</b>, penerima dapat <b>+5 Charm</b>).\n"
-        "  Contoh: <code>/treat @clara negroni</code>\n\n"
         "• <code>/booth [Nama Booth]</code> <i>(Khusus VIP)</i> — Reservasi meja VIP eksklusif.\n"
-        "  Contoh: <code>/booth Velvet Corner #1</code>\n\n"
         "• <code>/dice @username [taruhan 10-100 VC]</code> — Duel dadu 1v1 berhadiah VC.\n"
-        "  Contoh: <code>/dice @alvaro 25</code>\n\n"
         "• <code>/mystery</code> (40 VC), <code>/toast @user</code>, <code>/bill</code>, <code>/guests</code>, <code>/topcharm</code>, <code>/lapak</code>."
     )
     await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=back_info_kb())
-
+    
 @router.callback_query(F.data == "info_cmd_music")
 async def cb_info_cmd_music(call: types.CallbackQuery):
     await call.answer()
