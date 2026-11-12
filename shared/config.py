@@ -3,34 +3,39 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Token & Identitas
-TOKEN_HANS = os.getenv("TOKEN_HANS")       # Bot 1: Gatekeeper & Ekonomi
-TOKEN_JULIAN = os.getenv("TOKEN_JULIAN")   # Bot 2: Bartender & Grup RP
-TOKEN_KAELEN = os.getenv("TOKEN_KAELEN")   # Bot 3: DJ & Jukebox
+# Token Bot
+TOKEN_HANS = os.getenv("TOKEN_HANS")
+TOKEN_JULIAN = os.getenv("TOKEN_JULIAN")
+TOKEN_KAELEN = os.getenv("TOKEN_KAELEN")
 
-# Akun Asisten Voice Chat (Userbot)
-API_ID = int(os.getenv("API_ID", 0))
-API_HASH = os.getenv("API_HASH")
-SESSION_STRING = os.getenv("SESSION_STRING")
-
-# Database & Grup
+# Database & ID Utama
 DATABASE_URL = os.getenv("DATABASE_URL")
 OWNER_ID = int(os.getenv("OWNER_ID", 0))
+OWNER_USERNAME = os.getenv("OWNER_USERNAME", "OwnerVelvet") # Tanpa @
 GROUP_ID = int(os.getenv("GROUP_ID", 0))
 
-# Aturan Bar (The Velvet Hour)
+# 2 Channel Wajib Sub
+CH_INFO_ID = int(os.getenv("CH_INFO_ID", 0))
+CH_PROMOTE_ID = int(os.getenv("CH_PROMOTE_ID", 0))
+CH_INFO_LINK = os.getenv("CH_INFO_LINK", "https://t.me/VelvetInfo")
+CH_PROMOTE_LINK = os.getenv("CH_PROMOTE_LINK", "https://t.me/VelvetBoard")
+
+# Aturan & Ekonomi Bar
 REQUIRED_CN_SYMBOL = "🥂"
 WELCOME_BONUS = 200
 DAILY_COIN = 30
 VIP_COST_24H = 300
-SONG_REQ_COST = 15
+PROMOTE_CD_REG = 45 # Menit
+PROMOTE_CD_VIP = 30 # Menit
 
-# Timer Pasif (dalam menit)
-IDLE_WARN_REG = 45
-IDLE_KICK_REG = 60
-IDLE_WARN_VIP = 90
-IDLE_KICK_VIP = 120
-
-# Cooldown Promote (dalam menit)
-PROMOTE_CD_REG = 45
-PROMOTE_CD_VIP = 30
+# Katalog Gift (kode: (Nama, Harga Beli, Nilai Tukar 50%, Poin Charm))
+GIFTS_CATALOG = {
+    "espresso": ("☕ Warm Espresso", 40, 20, 5),
+    "martini": ("🍸 Classic Martini", 60, 30, 10),
+    "rose": ("🌹 Single Red Rose", 80, 40, 15),
+    "truffle": ("🍫 Artisan Truffle Box", 150, 75, 25),
+    "bear": ("🧸 Velvet Teddy Bear", 200, 100, 35),
+    "bouquet": ("💐 Midnight Bouquet", 250, 125, 45),
+    "champagne": ("🥂 Vintage Champagne", 400, 200, 70),
+    "crown": ("👑 The Velvet Crown", 1500, 750, 250),
+}
