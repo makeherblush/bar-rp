@@ -2,34 +2,91 @@ import asyncio
 import random
 import logging
 from datetime import datetime, timedelta
+
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.types import (
-    InlineKeyboardMarkup, InlineKeyboardButton,
-    ChatPermissions, BotCommand, BotCommandScopeAllGroupChats
+    BotCommand, BotCommandScopeAllGroupChats
 )
 from aiogram.enums import ParseMode
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import shared.database as db
 from shared.config import (
-    TOKEN_JULIAN, OWNER_ID, GROUP_ID, REQUIRED_CN_SYMBOL
+    TOKEN_JULIAN, TOKEN_HANS, OWNER_ID, GROUP_ID,
+    REQUIRED_CN_SYMBOL, VIP_COST_24H
 )
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN_JULIAN)
+hans_bot = Bot(token=TOKEN_HANS)  # Untuk aksi Bouncer (kick/warn)
 dp = Dispatcher()
-scheduler = AsyncIOScheduler()
 
-# --- HELPER FUNCTIONS ---
-async def auto_delete(msg: types.Message, delay: int = 90):
-    """Menghapus pesan sementara agar grup tidak nyampah"""
+# --- KATALOG MENU BAR & DAPUR (NARASI ROLEPLAY) ---
+DRINKS_MENU = {
+    "espresso": (
+        "☕ <b>Velvet Double Espresso</b>",
+        "<i>Julian menekan tuas mesin espresso kuningan hingga cairan pekat berwarna karamel menetes perlahan ke cangkir porselen hangat.</i>\n"
+        "<b>\"Espresso ganda tanpa gula—pas untuk menjaga pikiran tetap tajam malam ini.\"</b>"
+    ),
+    "negroni": (
+        "🍸 <b>Midnight Smoked Negroni</b>",
+        "<i>Julian mengaduk gin, campari, dan vermouth merah di dalam mixing glass kristal berisi es batu besar, lalu mengasapinya dengan kayu ceri.</i>\n"
+        "<b>\"Sedikit pahit di awal, hangat di akhir. Nikmati perlahan.\"</b>"
+    ),
+    "whisky": (
+        "🥃 <b>Highland Single Malt (On The Rocks)</b>",
+        "<i>Suara denting bola es kristal beradu dengan gelas lowball berat saat Julian menuangkan cairan keemasan beraroma kayu ek.</i>\n"
+        "<b>\"Pilihan klasik bagi mereka yang datang membawa banyak cerita.\"</b>"
+    ),
+    "mocktail": (
+        "🍹 <b>Crimson Velvet Fizz (Non-Alkohol)</b>",
+        "<i>Julian mengocok sari delima, perasan jeruk darah, dan sirup vanila dengan soda dingin, lalu menghiasinya dengan tangkai rosemary segar.</i>\n"
+        "<b>\"Segar, ringan, dan tetap berkelas tanpa perlu pusing.\"</b>"
+    ),
+    "water": (
+        "💧 <b>Chilled Sparkling Mineral Water</b>",
+        "<i>Julian menuangkan air mineral berkarbonasi dingin ke gelas tinggi dengan irisan lemon tipis di bibir gelas.</i>\n"
+        "<b>\"Jeda yang tepat untuk menetralkan suasana malam.\"</b>"
+    ),
+}
+
+FOODS_MENU = {
+    "fries": (
+        "🍟 <b>Black Truffle Parmesan Fries</b>",
+        "<i>Waitress Clara meletakkan keranjang tembaga berisi kentang goreng renyah beraroma minyak truffle dan taburan keju parmesan tua di mejamu.</i>\n"
+        "<b>\"Hati-hati masih panas—ini menu favorit tamu di sudut lounge.\"</b>"
+    ),
+    "steak": (
+        "🥩 <b>Pan-Seared Wagyu Cube Bites</b>",
+        "<i>Clara menyajikan piring batu hangat berisi potongan daging wagyu empuk dengan saus lada hitam dan bawang putih panggang.</i>\n"
+        "<b>\"Silakan dinikmati selagi hangat agar teksturnya tetap lumer.\"</b>"
+    ),
+    "pasta": (
+        "🍝 <b>Creamy Smoked Carbonara</b>",
+        "<i>Aroma lada hitam tumbuk dan kuning telur keemasan langsung tercium saat Clara meletakkan piring pasta di hadapanmu.</i>\n"
+        "<b>\"Selamat menikmati makan malammu di The Velvet Hour.\"</b>"
+    ),
+    "cake": (
+        "🍰 <b>Dark Chocolate Velvet Tart</b>",
+        "<i>Clara menggeser piring kecil berisi tart cokelat hitam pekat dengan taburan bubuk emas tipis dan buah beri segar.</i>\n"
+        "<b>\"Sedikit rasa manis untuk menemani alunan musik malam ini.\"</b>"
+    ),
+}
+
+# --- HELPER AUTO-DELETE PESAN LAYANAN (2 MENIT) ---
+async def schedule_delete(msg: types.Message, delay: int = 120):
     await asyncio.sleep(delay)
     try:
         await msg.delete()
     except Exception:
         pass
 
+async def reply_and_autodelete(message: types.Message, text: str, delay: int = 120):
+    sent = await message.reply(text, parse_mode=ParseMode.HTML)
+    asyncio.create_task(schedule_delete(sent, delay))
+    return sent
+
+# --- HELPER DATABASE & STATUS ---
 async def is_staff_or_owner(user_id: int) -> bool:
     if user_id == OWNER_ID:
         return True
@@ -37,523 +94,528 @@ async def is_staff_or_owner(user_id: int) -> bool:
         row = await conn.fetchrow("SELECT is_admin FROM users WHERE user_id = $1", user_id)
         return bool(row and row["is_admin"])
 
-async def get_active_shift(role: str):
+async def get_active_shift(user_id: int):
     async with db.pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT user_id, started_at, actions_count FROM active_shifts WHERE role = $1", role)
-        if row:
-            if datetime.utcnow() - row["started_at"] > timedelta(hours=2):
-                await finish_shift(role, row["user_id"], row["actions_count"])
-                return None
-            if datetime.utcnow() - row["started_at"] > timedelta(minutes=30) and row["actions_count"] == 0:
-                await conn.execute("DELETE FROM active_shifts WHERE role = $1", role)
-                try:
-                    await bot.send_message(
-                        GROUP_ID,
-                        f"⚠️ Shift <b>{role.upper()}</b> milik <a href='tg://user?id={row['user_id']}'>staf</a> dicabut otomatis karena tidak ada aktivitas pelayanan dalam 30 menit pertama.",
-                        parse_mode=ParseMode.HTML
-                    )
-                except Exception:
-                    pass
-                return None
-            return row
-    return None
+        return await conn.fetchrow("SELECT role, started_at, actions_count FROM active_shifts WHERE user_id = $1", user_id)
 
-async def finish_shift(role: str, user_id: int, actions: int):
+async def add_shift_action(user_id: int):
     async with db.pool.acquire() as conn:
-        await conn.execute("DELETE FROM active_shifts WHERE role = $1", role)
-        if actions >= 5:
-            await conn.execute("UPDATE users SET coins = coins + 120 WHERE user_id = $1", user_id)
-            msg = f"💼 <b>Shift {role.upper()} Selesai!</b> Terima kasih atas kerja kerasmu ({actions} pelayanan). Upah <b>+120 VC</b> telah masuk ke dompetmu."
-        else:
-            msg = f"💼 <b>Shift {role.upper()} Selesai.</b> Pelayanan kurang dari 5 kali ({actions}/5), sehingga upah shift tidak cair."
-    try:
-        await bot.send_message(GROUP_ID, f"<a href='tg://user?id={user_id}'>Staf</a> — {msg}", parse_mode=ParseMode.HTML)
-    except Exception:
-        pass
+        await conn.execute("UPDATE active_shifts SET actions_count = actions_count + 1 WHERE user_id = $1", user_id)
 
-async def add_shift_action(user_id: int, role: str):
-    async with db.pool.acquire() as conn:
-        await conn.execute("UPDATE active_shifts SET actions_count = actions_count + 1 WHERE user_id = $1 AND role = $2", user_id, role)
-
-async def kick_from_bar(user_id: int, reason_text: str):
-    """Mengeluarkan member (kick + unban) agar bisa masuk lagi lewat bot nanti"""
-    try:
-        await bot.ban_chat_member(GROUP_ID, user_id)
-        await asyncio.sleep(1)
-        await bot.unban_chat_member(GROUP_ID, user_id)
-    except Exception:
-        pass
-    async with db.pool.acquire() as conn:
-        await conn.execute("UPDATE users SET is_in_bar = FALSE, warned_idle = FALSE WHERE user_id = $1", user_id)
-    m = await bot.send_message(GROUP_ID, reason_text, parse_mode=ParseMode.HTML)
-    asyncio.create_task(auto_delete(m, 120))
-
-# --- PELACAK AKTIVITAS & SIMBOL CN DI GRUP ---
+# --- SAMBUTAN OTOMATIS SAAT TAMU BARU MASUK GRUP ---
 @dp.message(F.chat.id == GROUP_ID, F.new_chat_members)
-async def on_user_join(message: types.Message):
+async def on_guest_enter(message: types.Message):
     for member in message.new_chat_members:
         if member.is_bot:
             continue
+
         async with db.pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT is_in_bar, is_vip FROM users WHERE user_id = $1", member.id)
-        if (not row or not row["is_in_bar"] or REQUIRED_CN_SYMBOL not in (member.full_name or "")) and not await is_staff_or_owner(member.id):
-            await kick_from_bar(
-                member.id,
-                f"🦍 <b>Bouncer Hans</b> mencegat <a href='tg://user?id={member.id}'>{member.first_name}</a> di pintu. "
-                f"<i>\"Kamu belum melapor ke meja resepsionis atau belum mengenakan atribut {REQUIRED_CN_SYMBOL}.\"</i>"
-            )
-            continue
+            await conn.execute("""
+                INSERT INTO users (user_id, username, full_name, is_in_bar, last_active, warned_idle)
+                VALUES ($1, $2, $3, TRUE, NOW(), FALSE)
+                ON CONFLICT (user_id) DO UPDATE
+                SET username = EXCLUDED.username,
+                    full_name = EXCLUDED.full_name,
+                    is_in_bar = TRUE,
+                    last_active = NOW(),
+                    warned_idle = FALSE;
+            """, member.id, member.username or "NoUsername", member.full_name)
 
-        if row and row["is_vip"]:
-            await message.answer(
-                f"✨ <i>Lampu sorot menyala lembut saat tirai beludru tersibak.</i>\n"
-                f"<b>\"Selamat datang kembali di meja VIP, <a href='tg://user?id={member.id}'>{member.first_name}</a>.\"</b>",
-                parse_mode=ParseMode.HTML
-            )
+        welcome_msg = await message.answer(
+            "<i>Tirai beludru merah di pintu masuk tersibak perlahan. Bartender Julian mengangkat pandangan dari gelas kristal yang sedang ia lap, lalu tersenyum ramah.</i>\n\n"
+            f"🥂 <b>\"Selamat malam, <a href='tg://user?id={member.id}'>{member.first_name}</a>. "
+            "Selamat datang di <i>The Velvet Hour</i>. Silakan pilih meja yang nyaman—ketik <code>/order</code> untuk memesan minuman, "
+            "<code>/eat</code> untuk hidangan dapur, atau <code>/reqsong</code> untuk memutar lagu di ruangan.\"</b>",
+            parse_mode=ParseMode.HTML
+        )
+        asyncio.create_task(schedule_delete(welcome_msg, 120))
 
-# --- COMMAND UTILITAS TAMU ---
-@dp.message(Command("checkin"), F.chat.id == GROUP_ID)
-async def cmd_checkin(message: types.Message):
-    async with db.pool.acquire() as conn:
-        await conn.execute("UPDATE users SET last_active = NOW(), warned_idle = FALSE, is_in_bar = TRUE WHERE user_id = $1", message.from_user.id)
-    m = await message.reply("🥂 <i>Julian mengangguk ke arah mejamu: \"Baik, gelasmu masih saya jaga. Selamat menikmati obrolan.\"</i>", parse_mode=ParseMode.HTML)
-    asyncio.create_task(auto_delete(m, 45))
-
-@dp.message(Command("checkout"), F.chat.id == GROUP_ID)
-async def cmd_checkout(message: types.Message):
-    user = message.from_user
-    await kick_from_bar(
-        user.id,
-        f"🧥 <b><a href='tg://user?id={user.id}'>{user.first_name}</a></b> meletakkan sejumlah koin di atas meja, mengambil mantelnya, dan melangkah keluar pintu bar. <i>Sampai jumpa di kunjungan berikutnya!</i>"
-    )
-
+# --- COMMAND TAMU DI RUANG UTAMA ---
 @dp.message(Command("bill"), F.chat.id == GROUP_ID)
 async def cmd_bill(message: types.Message):
+    user_id = message.from_user.id
     async with db.pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT coins, charm_points, is_vip FROM users WHERE user_id = $1", message.from_user.id)
+        row = await conn.fetchrow(
+            "SELECT coins, charm_points, is_vip, vip_until, total_active_mins FROM users WHERE user_id = $1",
+            user_id
+        )
     if not row:
-        return
-    status = "🍾 VIP Member" if row["is_vip"] else "🥂 Regular Guest"
-    m = await message.reply(
-        f"🧾 <b>CATATAN MEJA — {message.from_user.first_name}</b>\n"
-        f"• Status: {status}\n"
-        f"• Dompet: <b>{row['coins']} VC</b>\n"
-        f"• Charm: <b>{row['charm_points']} Poin</b>",
-        parse_mode=ParseMode.HTML
+        return await reply_and_autodelete(message, "<i>Julian memeriksa buku catatan: Namamu belum terdaftar. Ketuk pintu utama di PC Hans terlebih dahulu.</i>", 60)
+
+    is_vip = bool(row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
+    status_txt = f"🍾 VIP Reserve (s/d {row['vip_until'].strftime('%d %b %H:%M UTC')})" if is_vip else "🥂 Regular Guest"
+
+    text = (
+        f"🧾 <b>BAR TAB & STATUS — {message.from_user.first_name}</b>\n\n"
+        f"• <b>Status Meja:</b> {status_txt}\n"
+        f"• <b>Saldo Dompet:</b> {row['coins']} Velvet Coins (VC)\n"
+        f"• <b>Charm Points:</b> {row['charm_points']} Poin\n"
+        f"• <b>Total Waktu Nongkrong:</b> {row['total_active_mins'] or 0} Menit"
     )
-    asyncio.create_task(auto_delete(m, 45))
+    await reply_and_autodelete(message, text, 90)
+
+@dp.message(Command("order"), F.chat.id == GROUP_ID)
+async def cmd_order(message: types.Message):
+    item_raw = message.text.replace("/order", "").strip().lower()
+    if not item_raw:
+        menu_list = "\n".join([f"• <code>/order {k}</code> — {v[0]}" for k, v in DRINKS_MENU.items()])
+        return await reply_and_autodelete(
+            message,
+            f"🍸 <b>DAFTAR MINUMAN BARTENDER JULIAN</b>\n\n{menu_list}\n\n<i>Atau ketik nama minuman apa saja, misal: <code>/order Iced Caramel Latte</code></i>",
+            90
+        )
+
+    matched = None
+    for key, val in DRINKS_MENU.items():
+        if key in item_raw:
+            matched = val
+            break
+
+    if matched:
+        title, narrative = matched
+        text = f"{title}\n{narrative}\n\n<i>— Disajikan untuk <b>{message.from_user.first_name}</b>.</i>"
+    else:
+        custom_name = message.text.replace("/order", "").strip()
+        text = (
+            f"🍸 <b>Pesanan Khusus: {custom_name}</b>\n"
+            f"<i>Julian mengangguk paham, meracik bahan-bahan pilihan di balik meja bar kayu ek, lalu menggeser gelas <b>{custom_name}</b> dengan mulus ke hadapanmu.</i>\n"
+            f"<b>\"Racikan khusus sesuai permintaanmu. Selamat menikmati malam di The Velvet Hour, {message.from_user.first_name}.\"</b>"
+        )
+    await reply_and_autodelete(message, text, 120)
+
+@dp.message(Command("eat"), F.chat.id == GROUP_ID)
+async def cmd_eat(message: types.Message):
+    item_raw = message.text.replace("/eat", "").strip().lower()
+    if not item_raw:
+        menu_list = "\n".join([f"• <code>/eat {k}</code> — {v[0]}" for k, v in FOODS_MENU.items()])
+        return await reply_and_autodelete(
+            message,
+            f"🍽️ <b>DAFTAR HIDANGAN DAPUR (WAITRESS CLARA)</b>\n\n{menu_list}\n\n<i>Atau ketik makanan apa saja, misal: <code>/eat Croissant Hangat</code></i>",
+            90
+        )
+
+    matched = None
+    for key, val in FOODS_MENU.items():
+        if key in item_raw:
+            matched = val
+            break
+
+    if matched:
+        title, narrative = matched
+        text = f"{title}\n{narrative}\n\n<i>— Diantarkan ke meja <b>{message.from_user.first_name}</b>.</i>"
+    else:
+        custom_food = message.text.replace("/eat", "").strip()
+        text = (
+            f"🍽️ <b>Hidangan Khusus: {custom_food}</b>\n"
+            f"<i>Waitress Clara keluar dari balik pintu dapur membawa nampan perak hangat, lalu meletakkan <b>{custom_food}</b> di mejamu dengan senyum ramah.</i>\n"
+            f"<b>\"Pesanan dari dapur sudah siap. Silakan dinikmati, {message.from_user.first_name}.\"</b>"
+        )
+    await reply_and_autodelete(message, text, 120)
+
+@dp.message(Command("mystery"), F.chat.id == GROUP_ID)
+async def cmd_mystery(message: types.Message):
+    user_id = message.from_user.id
+    cost = 40
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
+            coins = await conn.fetchval("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", user_id)
+            if not coins or coins < cost:
+                return await reply_and_autodelete(message, f"<i>Julian menggeleng sopan: Saldo tidak cukup (butuh <b>{cost} VC</b> untuk memutar Roulette Meja Bar).</i>", 60)
+            await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", cost, user_id)
+
+            outcomes = [
+                ("golden", "✨ <b>GOLDEN ELIXIR (+85 VC)!</b>\n<i>Cairan berkilau keemasan dituangkan ke gelasmu. Kamu memenangkan hadiah utama meja bar!</i>"),
+                ("truth", "🕯️ <b>VELVET TRUTH CARD!</b>\n<i>Julian menyodorkan kartu hitam: \"Jawab dengan jujur di chat—apa hal paling nekat yang pernah kamu lakukan diam-diam?\"</i>"),
+                ("dare", "🎲 <b>VELVET DARE CARD!</b>\n<i>Julian tersenyum tipis: \"Tantangan malam ini—kirim pesan pujian RP ke salah satu tamu yang sedang aktif di ruangan!\"</i>"),
+                ("water", "💧 <b>CHILLED MINERAL WATER!</b>\n<i>Zonk! Gelas yang muncul hanya berisi air putih dingin. Coba lagi keberuntunganmu nanti.</i>"),
+            ]
+            choice_key, result_text = random.choice(outcomes)
+            if choice_key == "golden":
+                await conn.execute("UPDATE users SET coins = coins + 85 WHERE user_id = $1", user_id)
+
+    await reply_and_autodelete(
+        message,
+        f"🎰 <b>VELVET BAR ROULETTE ({message.from_user.first_name})</b>\n\n{result_text}",
+        120
+    )
+
+@dp.message(Command("toast"), F.chat.id == GROUP_ID)
+async def cmd_toast(message: types.Message):
+    target = message.text.replace("/toast", "").strip()
+    if not target and message.reply_to_message:
+        target = message.reply_to_message.from_user.first_name
+    if not target:
+        return await reply_and_autodelete(message, "Sebutkan nama/username tamu atau balas pesannya. Contoh: <code>/toast @username</code>", 60)
+
+    await reply_and_autodelete(
+        message,
+        f"🥂 <b>BERSULANG DI RUANG UTAMA!</b>\n"
+        f"<i><b>{message.from_user.first_name}</b> mengangkat gelas kristalnya tinggi-tinggi ke arah <b>{target}</b>. "
+        f"Denting dua gelas beradu halus di tengah hangatnya lampu lounge.</i>",
+        120
+    )
 
 @dp.message(Command("guests"), F.chat.id == GROUP_ID)
 async def cmd_guests(message: types.Message):
     async with db.pool.acquire() as conn:
-        guests = await conn.fetch("SELECT user_id, full_name, is_vip FROM users WHERE is_in_bar = TRUE LIMIT 25")
-        shifts = await conn.fetch("SELECT role, user_id FROM active_shifts")
-
-    shift_txt = "\n".join([f"• <b>{s['role'].title()}:</b> <a href='tg://user?id={s['user_id']}'>Bertugas</a>" for s in shifts]) or "<i>Semua posisi ditangani oleh Staf Otomatis (NPC).</i>"
-    guest_txt = ", ".join([f"{'🍾' if g['is_vip'] else '🥂'} {g['full_name']}" for g in guests]) or "Belum ada tamu."
-
-    m = await message.reply(
-        f"🏛️ <b>SUASANA THE VELVET HOUR SAAT INI</b>\n\n"
-        f"<b>Staf Paruh Waktu Aktif:</b>\n{shift_txt}\n\n"
-        f"<b>Tamu di Ruangan ({len(guests)}):</b>\n{guest_txt}",
-        parse_mode=ParseMode.HTML
-    )
-    asyncio.create_task(auto_delete(m, 90))
-
-# --- PELAYANAN RP & MODE ANTI-BENTROK ---
-@dp.message(Command("order"), F.chat.id == GROUP_ID)
-async def cmd_order(message: types.Message):
-    args = message.text.replace("/order", "").strip()
-    if not args:
-        m = await message.reply("Sebutkan nama minumannya. Contoh: <code>/order Negroni</code>", parse_mode=ParseMode.HTML)
-        return asyncio.create_task(auto_delete(m, 30))
-
-    shift = await get_active_shift("bartender")
-    if shift and shift["user_id"] != message.from_user.id:
-        m = await message.reply(
-            f"🔔 <i>Pesanan masuk di meja bar!</i>\n"
-            f"<b>Bartender <a href='tg://user?id={shift['user_id']}'>bertugas</a></b>, ada pesanan <b>{args}</b> dari {message.from_user.first_name}. Gunakan <code>/mix</code> untuk melayani!",
-            parse_mode=ParseMode.HTML
+        rows = await conn.fetch(
+            "SELECT full_name, is_vip, vip_until FROM users WHERE is_in_bar = TRUE ORDER BY last_active DESC LIMIT 25"
         )
-    else:
-        m = await message.reply(
-            f"🍸 <b>Bartender Julian</b> menggeser segelas <b>{args}</b> melintasi meja kayu yang licin ke hadapan <b>{message.from_user.first_name}</b>.\n"
-            f"<i>\"Silakan dinikmati selagi dingin.\"</i>",
-            parse_mode=ParseMode.HTML
-        )
-    asyncio.create_task(auto_delete(m, 120))
+    if not rows:
+        return await reply_and_autodelete(message, "<i>Ruang utama tampak lengang malam ini.</i>", 60)
 
-@dp.message(Command("eat"), F.chat.id == GROUP_ID)
-async def cmd_eat(message: types.Message):
-    args = message.text.replace("/eat", "").strip()
-    if not args:
-        m = await message.reply("Sebutkan nama hidangannya. Contoh: <code>/eat Truffle Fries</code>", parse_mode=ParseMode.HTML)
-        return asyncio.create_task(auto_delete(m, 30))
+    lines = []
+    for r in rows:
+        badge = "🍾" if (r["is_vip"] and r["vip_until"] and r["vip_until"] > datetime.utcnow()) else "🥂"
+        lines.append(f"{badge} {r['full_name']}")
 
-    shift = await get_active_shift("waiter")
-    if shift and shift["user_id"] != message.from_user.id:
-        m = await message.reply(
-            f"🔔 <i>Pesanan dapur siap diantar!</i>\n"
-            f"<b>Waiter/Waitress <a href='tg://user?id={shift['user_id']}'>bertugas</a></b>, antarkan <b>{args}</b> ke meja {message.from_user.first_name} dengan <code>/dish</code>!",
-            parse_mode=ParseMode.HTML
-        )
-    else:
-        m = await message.reply(
-            f"🍽️ <b>Waitress Clara</b> meletakkan sepiring <b>{args}</b> hangat di meja <b>{message.from_user.first_name}</b>.\n"
-            f"<i>\"Hati-hati panas ya, selamat menikmati!\"</i>",
-            parse_mode=ParseMode.HTML
-        )
-    asyncio.create_task(auto_delete(m, 120))
-
-@dp.message(Command("toast"), F.chat.id == GROUP_ID)
-async def cmd_toast(message: types.Message):
-    target = message.text.replace("/toast", "").strip() or "seluruh penjuru ruangan"
-    m = await message.reply(
-        f"🥂 <b>{message.from_user.first_name}</b> mengangkat gelas kristalnya tinggi-tinggi ke arah <b>{target}</b>! "
-        f"Denting gelas terdengar nyaring di tengah hangatnya malam.",
-        parse_mode=ParseMode.HTML
-    )
-    asyncio.create_task(auto_delete(m, 120))
-
-@dp.message(Command("table"), F.chat.id == GROUP_ID)
-async def cmd_table(message: types.Message):
-    if not message.reply_to_message:
-        m = await message.reply("Balas (reply) pesan tamu yang ingin kamu ajak berbagi meja lalu ketik <code>/table</code>.", parse_mode=ParseMode.HTML)
-        return asyncio.create_task(auto_delete(m, 30))
-
-    target = message.reply_to_message.from_user
-    if target.id == message.from_user.id or target.is_bot:
-        return
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🥂 Terima Ajakan Meja", callback_data=f"accept_table_{message.from_user.id}_{target.id}")
-    ]])
-    await message.reply(
-        f"🕯️ <b>{message.from_user.first_name}</b> mengundang <b>{target.first_name}</b> untuk duduk satu meja malam ini.\n"
-        f"<i>(Berbagi meja memberikan tambahan +15 menit batas waktu santai untuk kalian berdua).</i>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=kb
+    await reply_and_autodelete(
+        message,
+        f"📋 <b>DAFTAR TAMU DI DALAM LOUNGE ({len(rows)})</b>\n\n" + "\n".join(lines),
+        90
     )
 
-@dp.callback_query(F.data.startswith("accept_table_"))
-async def cb_accept_table(call: types.CallbackQuery):
-    _, _, u1, u2 = call.data.split("_")
-    u1, u2 = int(u1), int(u2)
-    if call.from_user.id != u2:
-        return await call.answer("Undangan meja ini bukan untukmu.", show_alert=True)
-
+@dp.message(Command("topcharm"), F.chat.id == GROUP_ID)
+async def cmd_topcharm(message: types.Message):
     async with db.pool.acquire() as conn:
-        await conn.execute("UPDATE users SET last_active = last_active + INTERVAL '15 minutes' WHERE user_id = ANY($1::bigint[])", [u1, u2])
+        rows = await conn.fetch("SELECT full_name, charm_points FROM users WHERE charm_points > 0 ORDER BY charm_points DESC LIMIT 10")
+    if not rows:
+        return await reply_and_autodelete(message, "<i>Belum ada tamu yang mengumpulkan Charm Points malam ini.</i>", 60)
 
-    await call.message.edit_text(
-        f"🥂 <b>Meja Diresmikan!</b> <a href='tg://user?id={u1}'>Tamu</a> dan <a href='tg://user?id={u2}'>Tamu</a> kini resmi berbagi meja. "
-        f"<i>(+15 menit waktu lounge ditambahkan).</i>",
-        parse_mode=ParseMode.HTML
+    medals = ["🥇", "🥈", "🥉"] + ["✨"] * 7
+    lines = [f"{medals[i]} <b>{r['full_name']}</b> — {r['charm_points']} Charm" for i, r in enumerate(rows)]
+    await reply_and_autodelete(
+        message,
+        "🏆 <b>TOP CHARM LEADERBOARD — THE VELVET HOUR</b>\n\n" + "\n".join(lines),
+        90
     )
 
-# --- PERMAINAN MEJA BAR (MYSTERY & SPIN) ---
-@dp.message(Command("mystery"), F.chat.id == GROUP_ID)
-async def cmd_mystery(message: types.Message):
+@dp.message(Command("checkin"), F.chat.id == GROUP_ID)
+async def cmd_checkin(message: types.Message):
+    async with db.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET is_in_bar = TRUE, last_active = NOW(), warned_idle = FALSE WHERE user_id = $1",
+            message.from_user.id
+        )
+    await reply_and_autodelete(
+        message,
+        f"<i>Waitress Clara mengangguk sopan ke arah meja <b>{message.from_user.first_name}</b>—waktu kunjunganmu telah diperbarui.</i>",
+        60
+    )
+
+@dp.message(Command("checkout"), F.chat.id == GROUP_ID)
+async def cmd_checkout(message: types.Message):
     user_id = message.from_user.id
     async with db.pool.acquire() as conn:
-        async with conn.transaction():
-            coins = await conn.fetchval("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", user_id)
-            if not coins or coins < 40:
-                return await message.reply("Saldo tidak cukup (butuh <b>40 VC</b> untuk memesan Mystery Shot).", parse_mode=ParseMode.HTML)
-            await conn.execute("UPDATE users SET coins = coins - 40 WHERE user_id = $1", user_id)
-
-    outcomes = [
-        ("jackpot", "🌟 <b>GOLDEN ELIXIR!</b> Racikan langka! Kamu memenangkan <b>+120 Velvet Coins</b> dari meja bandar!"),
-        ("truth", "🍷 <b>CRIMSON TRUTH!</b> Efek minuman ini memaksamu jujur: <i>Sebutkan tipe karakter RP idamanmu di bar ini sekarang!</i>"),
-        ("dare", "🔥 <b>MIDNIGHT DARE!</b> Tantangan bartender: <i>Puji atau ajak bersulang member yang chat tepat di atasmu sekarang!</i>"),
-        ("zonk", "💧 <b>WARM WATER!</b> Julian terkekeh pelan: <i>\"Maaf, sepertinya gelasmu tertukar dengan air putih hangat.\"</i>")
-    ]
-    kind, text = random.choice(outcomes)
-    if kind == "jackpot":
-        async with db.pool.acquire() as conn:
-            await conn.execute("UPDATE users SET coins = coins + 120 WHERE user_id = $1", user_id)
-
-    await message.reply(f"🎲 <b>COCKTAIL ROULETTE — {message.from_user.first_name}</b>\n\n{text}", parse_mode=ParseMode.HTML)
-
-@dp.message(Command("spin"), F.chat.id == GROUP_ID)
-async def cmd_spin(message: types.Message):
-    async with db.pool.acquire() as conn:
-        guests = await conn.fetch("SELECT user_id, full_name FROM users WHERE is_in_bar = TRUE")
-    if len(guests) < 2:
-        return await message.reply("Tamu di ruangan belum cukup ramai untuk memutar botol.")
-    chosen = random.choice(guests)
-    m = await message.reply(
-        f"🍾 <b>{message.from_user.first_name}</b> memutar botol kosong di atas meja bar...\n"
-        f"Ujung botol berhenti menunjuk tepat ke arah <a href='tg://user?id={chosen['user_id']}'>{chosen['full_name']}</a>! <i>Truth or Dare?</i>",
-        parse_mode=ParseMode.HTML
-    )
-    asyncio.create_task(auto_delete(m, 120))
-
-@dp.message(Command("round"), F.chat.id == GROUP_ID)
-async def cmd_round(message: types.Message):
-    user_id = message.from_user.id
-    async with db.pool.acquire() as conn:
-        async with conn.transaction():
-            coins = await conn.fetchval("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", user_id)
-            if not coins or coins < 400:
-                return await message.reply("Butuh <b>400 VC</b> untuk mentraktir satu bar.", parse_mode=ParseMode.HTML)
-            await conn.execute("UPDATE users SET coins = coins - 400 WHERE user_id = $1", user_id)
-            await conn.execute("UPDATE users SET last_active = NOW(), warned_idle = FALSE WHERE is_in_bar = TRUE")
+        await conn.execute("UPDATE users SET is_in_bar = FALSE WHERE user_id = $1", user_id)
 
     await message.answer(
-        f"🔔🥂 <b>OPEN TAB! TRAKTIRAN SATU BAR!</b> 🥂🔔\n\n"
-        f"<b>{message.from_user.first_name}</b> baru saja membuka tab untuk seluruh ruangan! "
-        f"Bartender Julian menuangkan sampanye gratis ke setiap meja—<i>waktu pasif seluruh tamu di-reset kembali ke 0!</i>",
+        f"<i><b>{message.from_user.first_name}</b> meletakkan serbet di atas meja dan beranjak menuju pintu keluar. "
+        f"Bouncer Hans membukakan pintu mahoni dengan anggukan hormat.</i>\n"
+        f"<b>\"Terima kasih telah berkunjung ke The Velvet Hour. Hati-hati di jalan.\"</b>",
         parse_mode=ParseMode.HTML
     )
+    if not await is_staff_or_owner(user_id):
+        try:
+            await hans_bot.ban_chat_member(GROUP_ID, user_id)
+            await hans_bot.unban_chat_member(GROUP_ID, user_id)
+        except Exception:
+            pass
 
-# --- SISTEM KERJA PARUH WAKTU (/apply & COMMAND JABATAN) ---
+# --- SISTEM SHIFT KERJA PARUH WAKTU ---
 @dp.message(Command("apply"), F.chat.id == GROUP_ID)
 async def cmd_apply(message: types.Message):
+    role = message.text.replace("/apply", "").strip().lower()
+    valid_roles = {"bartender", "waiter", "host", "dj"}
+    if role not in valid_roles:
+        return await reply_and_autodelete(
+            message,
+            "💼 <b>PILIH POSISI SHIFT (2 JAM — UPAH 120 VC)</b>\n"
+            "• <code>/apply bartender</code>\n"
+            "• <code>/apply waiter</code>\n"
+            "• <code>/apply host</code>\n"
+            "• <code>/apply dj</code>",
+            90
+        )
+
     user_id = message.from_user.id
     async with db.pool.acquire() as conn:
-        mins = await conn.fetchval("SELECT total_active_mins FROM users WHERE user_id = $1", user_id)
-        if (mins or 0) < 30 and not await is_staff_or_owner(user_id):
-            return await message.reply("Kamu membutuhkan minimal <b>30 menit riwayat aktif</b> di bar sebelum melamar shift.", parse_mode=ParseMode.HTML)
+        existing = await conn.fetchrow("SELECT user_id FROM active_shifts WHERE role = $1", role)
+        if existing:
+            return await reply_and_autodelete(message, f"Posisi <b>{role.upper()}</b> sedang diisi oleh staf lain saat ini.", 60)
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="🍸 Bartender", callback_data="shift_bartender"),
-            InlineKeyboardButton(text="🍽️ Waiter/Waitress", callback_data="shift_waiter")
-        ],
-        [
-            InlineKeyboardButton(text="🎩 Host", callback_data="shift_host"),
-            InlineKeyboardButton(text="🎶 Resident DJ", callback_data="shift_dj")
-        ]
-    ])
-    m = await message.reply(
-        "📋 <b>PAPAN SHIFT PARUH WAKTU (2 JAM — UPAH 120 VC)</b>\n"
-        "Pilih posisi yang ingin kamu ambil sekarang:",
-        parse_mode=ParseMode.HTML,
-        reply_markup=kb
-    )
-    asyncio.create_task(auto_delete(m, 60))
+        already_working = await conn.fetchrow("SELECT role FROM active_shifts WHERE user_id = $1", user_id)
+        if already_working:
+            return await reply_and_autodelete(message, f"Kamu sudah bertugas sebagai <b>{already_working['role'].upper()}</b>. Ketik <code>/endshift</code> untuk selesai.", 60)
 
-@dp.callback_query(F.data.startswith("shift_"))
-async def cb_take_shift(call: types.CallbackQuery):
-    role = call.data.split("_")[1]
-    user_id = call.from_user.id
-
-    existing = await get_active_shift(role)
-    if existing:
-        return await call.answer(f"Posisi {role.title()} saat ini sedang diisi oleh staf lain!", show_alert=True)
-
-    async with db.pool.acquire() as conn:
-        already = await conn.fetchval("SELECT role FROM active_shifts WHERE user_id = $1", user_id)
-        if already:
-            return await call.answer(f"Kamu sudah memegang shift sebagai {already.title()}!", show_alert=True)
         await conn.execute(
             "INSERT INTO active_shifts (role, user_id, started_at, actions_count) VALUES ($1, $2, NOW(), 0)",
             role, user_id
         )
 
-    await call.message.edit_text(
-        f"👔 <b>SHIFT DIMULAI!</b>\n"
-        f"<a href='tg://user?id={user_id}'>{call.from_user.first_name}</a> kini resmi bertugas sebagai <b>{role.upper()}</b> selama 2 jam ke depan!\n"
-        f"<i>(Wajib melayani minimal 5x untuk mencairkan upah 120 VC).</i>",
+    await message.answer(
+        f"💼 <b>SHIFT DIMULAI!</b>\n"
+        f"<b>{message.from_user.first_name}</b> kini mengenakan pin staf dan resmi bertugas sebagai <b>{role.upper()}</b> selama 2 jam ke depan!\n"
+        f"<i>(Lakukan minimal 5x interaksi melayani tamu lalu ketik <code>/endshift</code> untuk mencairkan upah 120 VC).</i>",
         parse_mode=ParseMode.HTML
     )
 
+@dp.message(Command("endshift"), F.chat.id == GROUP_ID)
+async def cmd_endshift(message: types.Message):
+    user_id = message.from_user.id
+    async with db.pool.acquire() as conn:
+        shift = await conn.fetchrow("SELECT role, actions_count FROM active_shifts WHERE user_id = $1", user_id)
+        if not shift:
+            return await reply_and_autodelete(message, "Kamu sedang tidak dalam jadwal shift kerja.", 60)
+
+        await conn.execute("DELETE FROM active_shifts WHERE user_id = $1", user_id)
+        if shift["actions_count"] >= 5:
+            await conn.execute("UPDATE users SET coins = coins + 120 WHERE user_id = $1", user_id)
+            msg_txt = (
+                f"💵 <b>SHIFT SELESAI — UPAH CAIR!</b>\n"
+                f"Bartender Julian menyerahkan amplop berisi <b>+120 Velvet Coins</b> kepada <b>{message.from_user.first_name}</b> "
+                f"atas kerja kerasnya sebagai <b>{shift['role'].upper()}</b> ({shift['actions_count']} layanan)."
+            )
+        else:
+            msg_txt = (
+                f"📋 <b>SHIFT DIAKHIRI</b>\n"
+                f"<b>{message.from_user.first_name}</b> melepas pin <b>{shift['role'].upper()}</b>. "
+                f"<i>(Upah tidak cair karena layanan baru mencapai {shift['actions_count']}/5 kali).</i>"
+            )
+    await message.answer(msg_txt, parse_mode=ParseMode.HTML)
+
+# --- AKSI STAF PARUH WAKTU (RP NARASI) ---
 @dp.message(Command("mix"), F.chat.id == GROUP_ID)
 async def cmd_mix(message: types.Message):
-    shift = await get_active_shift("bartender")
-    if not shift or shift["user_id"] != message.from_user.id:
+    shift = await get_active_shift(message.from_user.id)
+    if (not shift or shift["role"] != "bartender") and not await is_staff_or_owner(message.from_user.id):
         return
-    args = message.text.replace("/mix", "").strip()
-    if not args:
-        return
-    await add_shift_action(message.from_user.id, "bartender")
-    await message.answer(
-        f"🍸 <b>Bartender {message.from_user.first_name}</b> mengocok <i>shaker</i> dengan lihai dan menyajikan racikan khusus: <b>{args}</b>!",
-        parse_mode=ParseMode.HTML
+    drink = message.text.replace("/mix", "").strip() or "Signature Velvet Cocktail"
+    await add_shift_action(message.from_user.id)
+    await reply_and_autodelete(
+        message,
+        f"🍸 <b>Bartender {message.from_user.first_name}</b> mengocok shaker perak dengan lihai dan menuangkan <b>{drink}</b> ke gelas kristal dingin!",
+        120
     )
 
 @dp.message(Command("sober"), F.chat.id == GROUP_ID)
 async def cmd_sober(message: types.Message):
-    shift = await get_active_shift("bartender")
-    if not shift or shift["user_id"] != message.from_user.id:
+    shift = await get_active_shift(message.from_user.id)
+    if (not shift or shift["role"] != "bartender") and not await is_staff_or_owner(message.from_user.id):
         return
-    target = message.text.replace("/sober", "").strip() or "tamu di meja bar"
-    await add_shift_action(message.from_user.id, "bartender")
-    await message.answer(
-        f"☕ <b>Bartender {message.from_user.first_name}</b> menyodorkan segelas espresso pekat untuk <b>{target}</b>. <i>\"Minum ini agar kesadaranmu kembali.\"</i>",
-        parse_mode=ParseMode.HTML
-    )
-
-@dp.message(Command("dish"), F.chat.id == GROUP_ID)
-async def cmd_dish(message: types.Message):
-    shift = await get_active_shift("waiter")
-    if not shift or shift["user_id"] != message.from_user.id:
-        return
-    args = message.text.replace("/dish", "").strip()
-    if not args:
-        return
-    await add_shift_action(message.from_user.id, "waiter")
-    await message.answer(
-        f"🍽️ <b>Pelayan {message.from_user.first_name}</b> membawakan hidangan hangat: <b>{args}</b> dengan senyum ramah.",
-        parse_mode=ParseMode.HTML
+    target = message.text.replace("/sober", "").strip() or "tamu di sudut bar"
+    await add_shift_action(message.from_user.id)
+    await reply_and_autodelete(
+        message,
+        f"☕ <b>Bartender {message.from_user.first_name}</b> menyodorkan secangkir kopi hitam pekat dan air dingin kepada <b>{target}</b> agar kembali segar.",
+        120
     )
 
 @dp.message(Command("welcome"), F.chat.id == GROUP_ID)
 async def cmd_welcome_staff(message: types.Message):
-    shift = await get_active_shift("waiter")
-    if not shift or shift["user_id"] != message.from_user.id:
+    shift = await get_active_shift(message.from_user.id)
+    if (not shift or shift["role"] != "waiter") and not await is_staff_or_owner(message.from_user.id):
         return
     target = message.text.replace("/welcome", "").strip() or "tamu baru"
-    await add_shift_action(message.from_user.id, "waiter")
-    await message.answer(
-        f"🥂 <b>Pelayan {message.from_user.first_name}</b> menyambut <b>{target}</b> dengan segelas <i>Welcome Drink</i>. <i>\"Selamat menikmati malam di The Velvet Hour!\"</i>",
-        parse_mode=ParseMode.HTML
+    await add_shift_action(message.from_user.id)
+    await reply_and_autodelete(
+        message,
+        f"🍽️ <b>Waiter {message.from_user.first_name}</b> menyambut <b>{target}</b> dengan senyum hangat, mengantar ke meja beludru, dan menyalakan lilin meja.",
+        120
+    )
+
+@dp.message(Command("dish"), F.chat.id == GROUP_ID)
+async def cmd_dish(message: types.Message):
+    shift = await get_active_shift(message.from_user.id)
+    if (not shift or shift["role"] != "waiter") and not await is_staff_or_owner(message.from_user.id):
+        return
+    dish_name = message.text.replace("/dish", "").strip() or "Hidangan Spesial Chef"
+    await add_shift_action(message.from_user.id)
+    await reply_and_autodelete(
+        message,
+        f"🍽️ <b>Waiter {message.from_user.first_name}</b> menyajikan <b>{dish_name}</b> hangat dari dapur langsung ke meja tamu.",
+        120
     )
 
 @dp.message(Command("ambience"), F.chat.id == GROUP_ID)
 async def cmd_ambience(message: types.Message):
-    shift = await get_active_shift("host")
-    if not shift or shift["user_id"] != message.from_user.id:
+    shift = await get_active_shift(message.from_user.id)
+    if (not shift or shift["role"] != "host") and not await is_staff_or_owner(message.from_user.id):
         return
-    desc = message.text.replace("/ambience", "").strip()
-    if not desc:
-        return
-    await add_shift_action(message.from_user.id, "host")
-    await message.answer(
-        f"🕯️ <b>SUASANA RUANGAN BERUBAH</b> <i>(oleh Host {message.from_user.first_name})</i>\n\n<i>{desc}</i>",
-        parse_mode=ParseMode.HTML
+    await add_shift_action(message.from_user.id)
+    await reply_and_autodelete(
+        message,
+        f"🕯️ <b>Host {message.from_user.first_name}</b> meredupkan lampu gantung kristal, menyisakan pendar cahaya lilin hangat yang intim di seluruh penjuru lounge...",
+        120
     )
 
 @dp.message(Command("toastall"), F.chat.id == GROUP_ID)
 async def cmd_toastall(message: types.Message):
-    shift = await get_active_shift("host")
-    if not shift or shift["user_id"] != message.from_user.id:
+    shift = await get_active_shift(message.from_user.id)
+    if (not shift or shift["role"] != "host") and not await is_staff_or_owner(message.from_user.id):
         return
-    note = message.text.replace("/toastall", "").strip() or "Untuk malam yang tak terlupakan!"
-    await add_shift_action(message.from_user.id, "host")
-    await message.answer(
-        f"🎩🥂 <b>Host {message.from_user.first_name}</b> mengajak seluruh pengunjung mengangkat gelas!\n<i>\"{note}\"</i>",
-        parse_mode=ParseMode.HTML
+    await add_shift_action(message.from_user.id)
+    await reply_and_autodelete(
+        message,
+        f"🥂 <b>Host {message.from_user.first_name}</b> berdiri di tengah ruangan sambil mengangkat gelas: <b>\"Mari bersulang untuk malam yang tak terlupakan di The Velvet Hour!\"</b>",
+        120
     )
 
-# --- COMMAND KEAMANAN ADMIN & OWNER DI GRUP ---
-@dp.message(Command("kick"), F.chat.id == GROUP_ID)
-async def cmd_admin_kick(message: types.Message):
-    if not await is_staff_or_owner(message.from_user.id) or not message.reply_to_message:
-        return
-    target = message.reply_to_message.from_user
-    await kick_from_bar(
-        target.id,
-        f"🦍 Atas perintah staf, <b>Bouncer Hans</b> mengantar <a href='tg://user?id={target.id}'>{target.first_name}</a> keluar melewati pintu belakang."
-    )
-
+# --- MODERASI ADMIN & OWNER ---
 @dp.message(Command("mute"), F.chat.id == GROUP_ID)
-async def cmd_admin_mute(message: types.Message):
+async def cmd_mute(message: types.Message):
     if not await is_staff_or_owner(message.from_user.id) or not message.reply_to_message:
         return
     target = message.reply_to_message.from_user
     until = datetime.utcnow() + timedelta(minutes=15)
-    await bot.restrict_chat_member(GROUP_ID, target.id, ChatPermissions(can_send_messages=False), until_date=until)
+    try:
+        await bot.restrict_chat_member(GROUP_ID, target.id, types.ChatPermissions(can_send_messages=False), until_date=until)
+        await message.answer(
+            f"🔇 <i>Bouncer Hans melangkah mendekat ke meja <b>{target.first_name}</b> dan memberi isyarat tenang.</i>\n"
+            f"<b>\"Harap tenangkan diri selama 15 menit sebelum kembali berbincang.\"</b>",
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        await reply_and_autodelete(message, f"Gagal mute: {e}", 30)
+
+@dp.message(Command("kick"), F.chat.id == GROUP_ID)
+async def cmd_kick(message: types.Message):
+    if not await is_staff_or_owner(message.from_user.id) or not message.reply_to_message:
+        return
+    target = message.reply_to_message.from_user
+    try:
+        await hans_bot.ban_chat_member(GROUP_ID, target.id)
+        await hans_bot.unban_chat_member(GROUP_ID, target.id)
+        async with db.pool.acquire() as conn:
+            await conn.execute("UPDATE users SET is_in_bar = FALSE WHERE user_id = $1", target.id)
+        await message.answer(
+            f"🚪 <i>Bouncer Hans mencengkeram bahu <b>{target.first_name}</b> dengan tegas dan mengantarnya keluar pintu mahoni.</i>",
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        await reply_and_autodelete(message, f"Gagal kick: {e}", 30)
+
+@dp.message(Command("round"), F.chat.id == GROUP_ID)
+async def cmd_round(message: types.Message):
+    if message.from_user.id != OWNER_ID:
+        return
+    async with db.pool.acquire() as conn:
+        await conn.execute("UPDATE users SET coins = coins + 25 WHERE is_in_bar = TRUE")
     await message.answer(
-        f"🔇 <b>Bouncer Hans</b> meminta <a href='tg://user?id={target.id}'>{target.first_name}</a> menenangkan diri selama 15 menit.",
+        "🍾 <b>ON THE HOUSE — TRATIRAN OWNER!</b>\n"
+        "<i>Bartender Julian membunyikan lonceng kuningan di atas meja bar! Seluruh tamu yang sedang berada di dalam lounge mendapatkan <b>+25 Velvet Coins</b>!</i>",
         parse_mode=ParseMode.HTML
     )
 
-# --- PELACAK CHAT RP (RESET TIMER + CEK SIMBOL CN) ---
+# --- LISTENER AKTIVITAS CHAT, KOIN RP & ANTI-LEPAS SIMBOL CN ---
 @dp.message(F.chat.id == GROUP_ID, F.text)
-async def track_group_activity(message: types.Message):
+async def on_group_activity(message: types.Message):
     if message.from_user.is_bot:
         return
+
     user = message.from_user
+    user_id = user.id
 
-    if REQUIRED_CN_SYMBOL not in (user.full_name or "") and not await is_staff_or_owner(user.id):
-        return await kick_from_bar(
-            user.id,
-            f"🦍 <b>Bouncer Hans</b> menegur <a href='tg://user?id={user.id}'>{user.first_name}</a>: "
-            f"<i>\"Kamu melepas simbol {REQUIRED_CN_SYMBOL} di dalam ruangan. Silakan pasang kembali di pintu depan.\"</i>"
-        )
-
-    words = message.text.strip().split()
-    if len(words) >= 3:
-        async with db.pool.acquire() as conn:
-            await conn.execute("""
-                UPDATE users 
-                SET last_active = NOW(), warned_idle = FALSE, is_in_bar = TRUE, total_active_mins = total_active_mins + 1
-                WHERE user_id = $1
-            """, user.id)
-
-# --- BACKGROUND SCHEDULER: AUTO-KICK 60/120 MENIT & CEK SHIFT ---
-async def check_idle_guests():
-    now = datetime.utcnow()
-    async with db.pool.acquire() as conn:
-        guests = await conn.fetch("SELECT user_id, full_name, is_vip, vip_until, last_active, warned_idle FROM users WHERE is_in_bar = TRUE")
-
-    for g in guests:
-        uid = g["user_id"]
-        if await is_staff_or_owner(uid):
-            continue
-
-        async with db.pool.acquire() as conn:
-            on_shift = await conn.fetchval("SELECT role FROM active_shifts WHERE user_id = $1", uid)
-        if on_shift:
-            continue
-
-        is_vip = g["is_vip"] and g["vip_until"] and g["vip_until"] > now
-        warn_limit = 90 if is_vip else 45
-        kick_limit = 120 if is_vip else 60
-        idle_mins = (now - g["last_active"]).total_seconds() / 60
-
-        if idle_mins >= kick_limit:
-            await kick_from_bar(
-                uid,
-                f"🚪 <b>Bouncer Hans</b> memapah <a href='tg://user?id={uid}'>{g['full_name']}</a> yang tertidur di sofa menuju pintu keluar. "
-                f"<i>\"Terima kasih sudah berkunjung ke The Velvet Hour malam ini!\"</i>"
-            )
-        elif idle_mins >= warn_limit and not g["warned_idle"]:
-            async with db.pool.acquire() as conn:
-                await conn.execute("UPDATE users SET warned_idle = TRUE WHERE user_id = $1", uid)
-            sisa = int(kick_limit - idle_mins)
-            m = await bot.send_message(
-                GROUP_ID,
-                f"🕯️ <b>Waitress Clara</b> melirik meja <a href='tg://user?id={uid}'>{g['full_name']}</a>. "
-                f"<i>\"Permisi Kak, masih di sini? {sisa} menit lagi meja akan dibereskan kalau tidak ada aktivitas (ketik /checkin).\"</i>",
+    # 1. Cek Anti-Lepas Simbol CN (🥂) untuk non-staff
+    if not await is_staff_or_owner(user_id):
+        if REQUIRED_CN_SYMBOL not in (user.full_name or ""):
+            await message.answer(
+                f"🚨 <i>Bouncer Hans menghentikan langkah <b>{user.first_name}</b> di tengah ruangan.</i>\n"
+                f"<b>\"Atribut resmi ({REQUIRED_CN_SYMBOL}) tidak terlihat pada namamu. Sesuai aturan, saya harus mengantarmu keluar.\"</b>",
                 parse_mode=ParseMode.HTML
             )
-            asyncio.create_task(auto_delete(m, 120))
+            try:
+                await hans_bot.ban_chat_member(GROUP_ID, user_id)
+                await hans_bot.unban_chat_member(GROUP_ID, user_id)
+            except Exception:
+                pass
+            async with db.pool.acquire() as conn:
+                await conn.execute("UPDATE users SET is_in_bar = FALSE WHERE user_id = $1", user_id)
+            return
 
-    for r in ["bartender", "waiter", "host", "dj"]:
-        await get_active_shift(r)
+    # 2. Reset timer pasif & beri koin tipis jika chat RP >= 3 kata
+    words = len(message.text.strip().split())
+    if words >= 3:
+        async with db.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO users (user_id, username, full_name, is_in_bar, last_active, warned_idle, total_active_mins)
+                VALUES ($1, $2, $3, TRUE, NOW(), FALSE, 1)
+                ON CONFLICT (user_id) DO UPDATE
+                SET username = EXCLUDED.username,
+                    full_name = EXCLUDED.full_name,
+                    is_in_bar = TRUE,
+                    last_active = NOW(),
+                    warned_idle = FALSE,
+                    total_active_mins = users.total_active_mins + 1,
+                    coins = users.coins + 1;
+            """, user_id, user.username or "NoUsername", user.full_name)
 
-# --- REGISTER MENU COMMAND (/) DI KEYBOARD GRUP ---
-async def register_group_commands():
+# --- BACKGROUND WORKER: PENGAWAS TAMU PASIF (IDLE 60M / VIP 120M) ---
+async def idle_watcher_loop():
+    while True:
+        await asyncio.sleep(60)
+        try:
+            async with db.pool.acquire() as conn:
+                guests = await conn.fetch(
+                    "SELECT user_id, full_name, is_vip, vip_until, last_active, warned_idle FROM users WHERE is_in_bar = TRUE"
+                )
+                now = datetime.utcnow()
+                for g in guests:
+                    uid = g["user_id"]
+                    if await is_staff_or_owner(uid):
+                        continue
+
+                    is_vip = bool(g["is_vip"] and g["vip_until"] and g["vip_until"] > now)
+                    limit_mins = 120 if is_vip else 60
+                    warn_mins = limit_mins - 10
+                    idle_mins = (now - g["last_active"]).total_seconds() / 60
+
+                    if idle_mins >= limit_mins:
+                        await conn.execute("UPDATE users SET is_in_bar = FALSE, warned_idle = FALSE WHERE user_id = $1", uid)
+                        try:
+                            await hans_bot.ban_chat_member(GROUP_ID, uid)
+                            await hans_bot.unban_chat_member(GROUP_ID, uid)
+                            await bot.send_message(
+                                GROUP_ID,
+                                f"🚪 <i>Bouncer Hans mengantar <b>{g['full_name']}</b> yang tertidur di sudut meja keluar pintu mahoni. "
+                                f"Saldo koin dan hadiah tetap tersimpan aman.</i>",
+                                parse_mode=ParseMode.HTML
+                            )
+                        except Exception:
+                            pass
+                    elif idle_mins >= warn_mins and not g["warned_idle"]:
+                        await conn.execute("UPDATE users SET warned_idle = TRUE WHERE user_id = $1", uid)
+                        warn_msg = await bot.send_message(
+                            GROUP_ID,
+                            f"🕯️ <i>Waitress Clara menyentuh bahu <a href='tg://user?id={uid}'>{g['full_name']}</a> dengan lembut:</i>\n"
+                            f"<b>\"Permisi, meja ini akan segera dirapikan dalam 10 menit jika tidak ada aktivitas. Ketik obrolan atau <code>/checkin</code> jika masih bersantai.\"</b>",
+                            parse_mode=ParseMode.HTML
+                        )
+                        asyncio.create_task(schedule_delete(warn_msg, 120))
+        except Exception as e:
+            logging.error(f"Idle watcher error: {e}")
+
+# --- REGISTER MENU COMMAND (/) DI GRUP ---
+async def register_julian_commands():
     commands = [
-        BotCommand(command="order", description="Pesan minuman di meja bar"),
-        BotCommand(command="eat", description="Pesan hidangan dari dapur"),
-        BotCommand(command="toast", description="Ajak tamu bersulang"),
-        BotCommand(command="table", description="Balas pesan tamu untuk duduk satu meja (+15m)"),
-        BotCommand(command="mystery", description="Cocktail Roulette berhadiah/tantangan (40 VC)"),
-        BotCommand(command="spin", description="Putar botol Truth or Dare"),
-        BotCommand(command="round", description="Open Tab traktir 1 bar (400 VC)"),
-        BotCommand(command="bill", description="Cek saldo koin, charm & status VIP"),
-        BotCommand(command="guests", description="Lihat tamu aktif & staf bertugas"),
-        BotCommand(command="checkin", description="Perpanjang waktu nongkrong agar tidak di-kick"),
-        BotCommand(command="checkout", description="Pamit pulang keluar bar"),
-        BotCommand(command="apply", description="Ambil shift staf paruh waktu (2 jam)"),
-        BotCommand(command="mix", description="[Bartender] Racik minuman pesanan"),
-        BotCommand(command="sober", description="[Bartender] Beri espresso penyadar"),
-        BotCommand(command="dish", description="[Waiter] Antarkan hidangan ke meja"),
-        BotCommand(command="welcome", description="[Waiter] Sambut tamu baru"),
-        BotCommand(command="ambience", description="[Host] Ubah narasi suasana ruangan"),
-        BotCommand(command="toastall", description="[Host] Ajak seluruh bar bersulang"),
+        BotCommand(command="order", description="Pesan minuman ke Bartender Julian"),
+        BotCommand(command="eat", description="Pesan makanan ke Waitress Clara"),
+        BotCommand(command="bill", description="Cek saldo Velvet Coins, VIP & Charm"),
+        BotCommand(command="mystery", description="Putar Bar Roulette (40 VC)"),
+        BotCommand(command="toast", description="Ajak bersulang tamu lain"),
+        BotCommand(command="guests", description="Lihat daftar tamu di dalam lounge"),
+        BotCommand(command="topcharm", description="Papan peringkat Charm Points"),
+        BotCommand(command="checkin", description="Perbarui waktu santai (anti-idle)"),
+        BotCommand(command="checkout", description="Pamit keluar dari ruang bar"),
+        BotCommand(command="apply", description="Ambil shift kerja paruh waktu (120 VC)"),
+        BotCommand(command="endshift", description="Selesaikan shift & cairkan upah"),
     ]
     await bot.set_my_commands(commands, scope=BotCommandScopeAllGroupChats())
 
 async def main():
     await db.init_db()
-    await register_group_commands()
-    scheduler.add_job(check_idle_guests, "interval", minutes=1)
-    scheduler.start()
+    await register_julian_commands()
+    asyncio.create_task(idle_watcher_loop())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
