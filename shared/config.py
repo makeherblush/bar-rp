@@ -1,41 +1,42 @@
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
+# --- TOKEN KETIGA BOT ---
+TOKEN_HANS = os.getenv("TOKEN_HANS", "")
+TOKEN_JULIAN = os.getenv("TOKEN_JULIAN", "")
+TOKEN_KAELEN = os.getenv("TOKEN_KAELEN", "")
 
-# Token Bot
-TOKEN_HANS = os.getenv("TOKEN_HANS")
-TOKEN_JULIAN = os.getenv("TOKEN_JULIAN")
-TOKEN_KAELEN = os.getenv("TOKEN_KAELEN")
-
-# Database & ID Utama
-DATABASE_URL = os.getenv("DATABASE_URL")
+# --- KONFIGURASI OWNER & LOKASI GRUP / CHANNEL ---
 OWNER_ID = int(os.getenv("OWNER_ID", 0))
-OWNER_USERNAME = os.getenv("OWNER_USERNAME", "OwnerVelvet") # Tanpa @
-GROUP_ID = int(os.getenv("GROUP_ID", 0))
+OWNER_USERNAME = os.getenv("OWNER_USERNAME", "").lstrip("@")
 
-# 2 Channel Wajib Sub
+GROUP_ID = int(os.getenv("GROUP_ID", 0))
 CH_INFO_ID = int(os.getenv("CH_INFO_ID", 0))
 CH_PROMOTE_ID = int(os.getenv("CH_PROMOTE_ID", 0))
-CH_INFO_LINK = os.getenv("CH_INFO_LINK", "https://t.me/VelvetInfo")
-CH_PROMOTE_LINK = os.getenv("CH_PROMOTE_LINK", "https://t.me/VelvetBoard")
 
-# Aturan & Ekonomi Bar
-REQUIRED_CN_SYMBOL = "🥂"
-WELCOME_BONUS = 200
-DAILY_COIN = 30
-VIP_COST_24H = 300
-PROMOTE_CD_REG = 45 # Menit
-PROMOTE_CD_VIP = 30 # Menit
+CH_INFO_LINK = os.getenv("CH_INFO_LINK", "https://t.me/")
+CH_PROMOTE_LINK = os.getenv("CH_PROMOTE_LINK", "https://t.me/")
 
-# Katalog Gift (kode: (Nama, Harga Beli, Nilai Tukar 50%, Poin Charm))
+# --- ATURAN ROLEPLAY & EKONOMI VELVET COINS (VC) ---
+REQUIRED_CN_SYMBOL = os.getenv("REQUIRED_CN_SYMBOL", "🥂")
+WELCOME_BONUS = int(os.getenv("WELCOME_BONUS", 200))
+DAILY_COIN = int(os.getenv("DAILY_COIN", 30))
+VIP_COST_24H = int(os.getenv("VIP_COST_24H", 300))
+
+PROMOTE_CD_REG = int(os.getenv("PROMOTE_CD_REG", 45))  # Cooldown promote reguler (menit)
+PROMOTE_CD_VIP = int(os.getenv("PROMOTE_CD_VIP", 30))  # Cooldown promote VIP (menit)
+
+# --- KATALOG HADIAH BAR BOUTIQUE ---
+# Format: "kode": ("Nama Gift", harga_beli, nilai_cair_50%, poin_charm)
 GIFTS_CATALOG = {
-    "espresso": ("☕ Warm Espresso", 40, 20, 5),
-    "martini": ("🍸 Classic Martini", 60, 30, 10),
-    "rose": ("🌹 Single Red Rose", 80, 40, 15),
-    "truffle": ("🍫 Artisan Truffle Box", 150, 75, 25),
-    "bear": ("🧸 Velvet Teddy Bear", 200, 100, 35),
-    "bouquet": ("💐 Midnight Bouquet", 250, 125, 45),
-    "champagne": ("🥂 Vintage Champagne", 400, 200, 70),
-    "crown": ("👑 The Velvet Crown", 1500, 750, 250),
+    "rose": ("🌹 Velvet Rose", 50, 25, 10),
+    "negroni": ("🍸 Classic Negroni", 100, 50, 25),
+    "cigar": ("🚬 Cuban Reserve Cigar", 200, 100, 55),
+    "champagne": ("🍾 Dom Pérignon Vintage", 500, 250, 150),
+    "diamond": ("💎 Midnight Diamond Ring", 1000, 500, 350),
 }
+
+# --- KONFIGURASI MUSIK & ASISTEN (KAELEN) ---
+API_ID = int(os.getenv("API_ID", 0))
+API_HASH = os.getenv("API_HASH", "")
+SESSION_STRING = os.getenv("SESSION_STRING", "")
+SONG_REQ_COST = int(os.getenv("SONG_REQ_COST", 15))
