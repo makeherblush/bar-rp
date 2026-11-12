@@ -7,8 +7,8 @@ from aiogram.enums import ParseMode
 
 import shared.database as db
 from hans_concierge.helpers import (
-    bot, GROUP_ID, REQUIRED_CN_SYMBOL, VIP_COST_24H, DAILY_REWARD_VC,
-    REFERRAL_BONUS_VC, DAILY_QUESTS,
+    bot, OWNER_ID, GROUP_ID, REQUIRED_CN_SYMBOL, VIP_COST_24H, DAILY_REWARD_VC,
+    REFERRAL_BONUS_VC, DAILY_QUESTS, is_staff_or_owner,
     get_or_create_referral_code, log_wallet_tx, add_quest_progress,
     main_lobby_kb, info_categories_kb, back_info_kb
 )
@@ -16,8 +16,6 @@ from hans_concierge.helpers import (
 router = Router()
 
 # --- GERBANG UTAMA (/start + KODE REFERRAL) ---
-@router.message(CommandStart(), F.chat.type == "private")
-# --- GERBANG UTAMA (/start) ---
 @router.message(CommandStart(), F.chat.type == "private")
 async def cmd_start_hans(message: types.Message):
     user = message.from_user
@@ -65,16 +63,16 @@ async def cb_back_lobby(call: types.CallbackQuery):
         reply_markup=await main_lobby_kb(call.from_user.id)
     )
 
-# --- TOMBOL INTERAKTIF PANEL ADMIN DI LOBI ---
+# --- TOMBOL INTERAKTIF PANEL ADMIN / OWNER DI LOBI ---
 @router.callback_query(F.data == "open_admin_panel")
 async def cb_open_admin_panel(call: types.CallbackQuery):
     user_id = call.from_user.id
     if not await is_staff_or_owner(user_id):
         return await call.answer("Akses ditolak. Menu ini khusus Staf Admin dan Owner.", show_alert=True)
-    
+
     await call.answer()
     is_owner = (user_id == OWNER_ID)
-    
+
     if is_owner:
         text = (
             "👑 <b>PANEL KONTROL UTAMA — OWNER THE VELVET HOUR</b>\n\n"
@@ -93,22 +91,11 @@ async def cb_open_admin_panel(call: types.CallbackQuery):
             "• <code>/delshop ID_Toko</code> — Hapus lapak partner\n\n"
             "<i>(Catatan: Pengangkatan admin dan penyuntikan koin VC /givevc merupakan hak eksklusif Owner).</i>"
         )
-    
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅️ Kembali ke Lobi Utama", callback_data="back_lobby")]
     ])
     await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
-
-@router.callback_query(F.data == "back_lobby")
-async def cb_back_lobby(call: types.CallbackQuery):
-    await call.answer()
-    await call.message.edit_text(
-        f"🏛️ <b>LOBI RESEPSIONIS — THE VELVET HOUR</b>\n\n"
-        f"<i>Hans merapikan buku tamu kulit di atas meja mahoni.</i>\n"
-        f"Silakan pilih layanan yang kamu perlukan, <b>{html.escape(call.from_user.first_name)}</b>:",
-        parse_mode=ParseMode.HTML,
-        reply_markup=main_lobby_kb()
-    )
 
 # --- VERIFIKASI MASUK BAR & PENCAIRAN BONUS REFERRAL ---
 @router.callback_query(F.data == "enter_bar")
@@ -164,7 +151,7 @@ async def cb_enter_bar(call: types.CallbackQuery):
         await call.message.edit_text(
             f"⚠️ Gagal membuat tautan masuk otomatis (<code>{html.escape(str(e))}</code>). Hubungi Owner.",
             parse_mode=ParseMode.HTML,
-            reply_markup=main_lobby_kb()
+            reply_markup=await main_lobby_kb(user.id)
         )
 
 # --- DOMPET & RIWAYAT MUTASI TRANSAKSI ---
@@ -206,7 +193,7 @@ async def cb_my_wallet(call: types.CallbackQuery):
         f"• <b>Status Keanggotaan:</b> {vip_txt}{booth_txt}\n\n"
         f"📜 <b>6 Mutasi Transaksi Terakhir:</b>\n{mutasi_block}"
     )
-    await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=main_lobby_kb())
+    await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=await main_lobby_kb(user_id))
 
 # --- ABSEN HARIAN (/daily & TOMBOL) ---
 async def _process_daily_claim(user_id: int, full_name: str) -> str:
@@ -230,13 +217,13 @@ async def _process_daily_claim(user_id: int, full_name: str) -> str:
 @router.message(Command("daily"), F.chat.type == "private")
 async def cmd_daily_pc(message: types.Message):
     res = await _process_daily_claim(message.from_user.id, message.from_user.first_name)
-    await message.answer(res, parse_mode=ParseMode.HTML, reply_markup=main_lobby_kb())
+    await message.answer(res, parse_mode=ParseMode.HTML, reply_markup=await main_lobby_kb(message.from_user.id))
 
 @router.callback_query(F.data == "claim_daily")
 async def cb_claim_daily(call: types.CallbackQuery):
     await call.answer()
     res = await _process_daily_claim(call.from_user.id, call.from_user.first_name)
-    await call.message.edit_text(res, parse_mode=ParseMode.HTML, reply_markup=main_lobby_kb())
+    await call.message.edit_text(res, parse_mode=ParseMode.HTML, reply_markup=await main_lobby_kb(call.from_user.id))
 
 # --- MISI HARIAN (/quests & TOMBOL) ---
 @router.callback_query(F.data == "daily_quests")
@@ -332,7 +319,7 @@ async def cb_my_referral(call: types.CallbackQuery):
         f"• <b>Total Teman Berhasil Diundang:</b> {total_invited} orang\n"
         f"• <b>Tautan Undanganmu:</b>\n<code>{ref_link}</code>"
     )
-    await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=main_lobby_kb())
+    await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=await main_lobby_kb(user_id))
 
 # --- BELI VIP PASS (24 JAM) ---
 @router.callback_query(F.data == "buy_vip")
@@ -361,10 +348,11 @@ async def cb_buy_vip(call: types.CallbackQuery):
         f"• <b>Berlaku hingga:</b> {new_until.strftime('%d %b %Y %H:%M UTC')}\n"
         f"• <b>Keuntungan VIP:</b>\n"
         f"  1. Gratis request lagu di grup (<code>/reqsong</code>)\n"
-        f"  2. Reservasi meja eksklusif (<code>/booth Nama Booth</code>)\n"
-        f"  3. Batas anti-idle 2x lebih lama (120 menit)",
+        f"  2. Gratis menu makanan & minuman eksklusif VIP (<code>/order</code> & <code>/eat</code>)\n"
+        f"  3. Reservasi meja eksklusif (<code>/booth Nama Booth</code>)\n"
+        f"  4. Batas anti-idle 2x lebih lama (120 menit)",
         parse_mode=ParseMode.HTML,
-        reply_markup=main_lobby_kb()
+        reply_markup=await main_lobby_kb(user_id)
     )
 
 # --- MENU PANDUAN & COMMAND LENGKAP ---
@@ -395,7 +383,7 @@ async def cb_info_cmd_bar(call: types.CallbackQuery):
         "• <code>/mystery</code> (40 VC), <code>/toast @user</code>, <code>/bill</code>, <code>/guests</code>, <code>/topcharm</code>, <code>/lapak</code>."
     )
     await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=back_info_kb())
-    
+
 @router.callback_query(F.data == "info_cmd_music")
 async def cb_info_cmd_music(call: types.CallbackQuery):
     await call.answer()
