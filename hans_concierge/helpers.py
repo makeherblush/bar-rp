@@ -5,12 +5,15 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 import shared.database as db
-from shared.config import (
-    TOKEN_HANS, OWNER_ID, GROUP_ID,
-    REQUIRED_CN_SYMBOL, VIP_COST_24H, DAILY_REWARD_VC
-)
+import shared.config as cfg
 
-bot = Bot(token=TOKEN_HANS)
+bot = Bot(token=cfg.TOKEN_HANS)
+
+OWNER_ID = cfg.OWNER_ID
+GROUP_ID = cfg.GROUP_ID
+REQUIRED_CN_SYMBOL = getattr(cfg, "REQUIRED_CN_SYMBOL", "🥂")
+VIP_COST_24H = getattr(cfg, "VIP_COST_24H", 150)
+DAILY_REWARD_VC = getattr(cfg, "DAILY_REWARD_VC", 20)
 
 # --- KONFIGURASI FITUR BARU HANS ---
 REFERRAL_BONUS_VC = 50  # Bonus untuk pengundang & tamu baru setelah lolos CN
