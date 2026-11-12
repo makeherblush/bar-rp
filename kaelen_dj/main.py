@@ -13,7 +13,6 @@ from pyrogram import Client
 from pyrogram.raw import functions
 from pytgcalls import PyTgCalls, filters
 from pytgcalls.types import MediaStream, AudioQuality
-import yt_dlp
 
 import shared.database as db
 from shared.config import (
@@ -37,21 +36,37 @@ call_py = PyTgCalls(assistant)
 song_queue = deque()
 is_playing = False
 idle_leave_task = None
+current_local_file = None
 
-# --- PENCARIAN LAGU: 1. CHANNEL GUDANG TELEGRAM -> 2. SOUNDCLOUD FALLBACK ---
+INLINE_MUSIC_BOTS = ["vkmusic_bot", "lybot", "DeezerMusicBot"]
+
+def _is_accurate_match(query: str, title: str, performer: str) -> bool:
+    """Memastikan judul dan nama penyanyi dari hasil pencarian sesuai dengan permintaan tamu"""
+    combined = f"{title} {performer}".lower()
+    # Bersihkan tanda pemisah '-' agar kata kunci judul & penyanyi dicek semua
+    keywords = [w.strip(" -–—()[]") for w in query.lower().split() if len(w.strip(" -–—()[]")) > 1]
+    if not keywords:
+        return True
+    matched = sum(1 for kw in keywords if kw in combined)
+    return (matched / len(keywords)) >= 0.7
+
+# --- PENCARIAN AKURAT (JUDUL + PENYANYI): 1. CEK GUDANG -> 2. TARIK DARI BOT INLINE ---
 async def find_song_source(query: str, user_id: int):
-    """Mencari file audio langsung di Channel Gudang Telegram, jika tidak ada cari ke SoundCloud"""
     os.makedirs("downloads", exist_ok=True)
+    clean_query = query.replace("-", " ").strip()
 
-    # 1. Cari di Channel Gudang Musik Telegram (Paling cepat & bebas blokir)
+    # 1. Cek di Channel Gudang Musik dengan pencocokan judul & penyanyi
     if MUSIC_VAULT_ID != 0:
         try:
-            async for msg in assistant.search_messages(MUSIC_VAULT_ID, query=query, limit=5):
+            async for msg in assistant.search_messages(MUSIC_VAULT_ID, query=clean_query, limit=10):
                 if msg.audio or msg.document:
                     media = msg.audio or msg.document
-                    title = getattr(media, "title", None) or getattr(media, "file_name", None) or query
-                    performer = getattr(media, "performer", None) or "The Velvet Vault"
+                    title = getattr(media, "title", None) or getattr(media, "file_name", None) or ""
+                    performer = getattr(media, "performer", None) or ""
                     duration = getattr(media, "duration", 0) or 0
+
+                    if not _is_accurate_match(query, title, performer):
+                        continue
 
                     file_path = await assistant.download_media(
                         msg,
@@ -59,80 +74,68 @@ async def find_song_source(query: str, user_id: int):
                     )
                     if file_path and os.path.exists(file_path):
                         return {
-                            "title": title,
-                            "uploader": performer,
+                            "title": f"{performer} - {title}" if performer and performer not in title else (title or query),
+                            "uploader": performer or "The Velvet Vault",
                             "duration": duration,
                             "stream_url": file_path,
                             "is_local_file": True
                         }
         except Exception as e:
-            logging.warning(f"Gagal cari di Music Vault: {e}")
+            logging.warning(f"Gagal cek gudang musik: {e}")
 
-    # 2. Cadangan: Cari via SoundCloud
-    def _sc_search():
-        opts = {
-            "format": "bestaudio/best",
-            "noplaylist": True,
-            "quiet": True,
-            "no_warnings": True,
-        }
+    # 2. Tarik dari Inline Bot (@vkmusic_bot dll) & pilih hasil yang judul + penyanyinya paling cocok
+    target_chat = MUSIC_VAULT_ID if MUSIC_VAULT_ID != 0 else "me"
+
+    for bot_username in INLINE_MUSIC_BOTS:
         try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(f"scsearch1:{query}", download=False)
-                if "entries" in info and info["entries"]:
-                    entry = info["entries"][0]
-                    if entry.get("duration", 0) > 480:
+            inline_res = await assistant.get_inline_bot_results(bot_username, clean_query)
+            if not inline_res or not inline_res.results:
+                continue
+
+            # Cek 5 hasil teratas untuk mencari kecocokan Judul + Penyanyi yang paling pas
+            chosen_result = inline_res.results[0]
+            for res in inline_res.results[:5]:
+                res_title = getattr(res, "title", "") or ""
+                res_desc = getattr(res, "description", "") or ""
+                if _is_accurate_match(query, res_title, res_desc):
+                    chosen_result = res
+                    break
+
+            await assistant.send_inline_bot_result(
+                chat_id=target_chat,
+                query_id=inline_res.query_id,
+                result_id=chosen_result.id
+            )
+            await asyncio.sleep(1.5)
+
+            async for msg in assistant.get_chat_history(target_chat, limit=3):
+                if msg.audio or msg.document:
+                    media = msg.audio or msg.document
+                    duration = getattr(media, "duration", 0) or 0
+                    if duration > 480:
                         return "TOO_LONG"
-                    return {
-                        "title": entry.get("title", query),
-                        "uploader": entry.get("uploader", "SoundCloud"),
-                        "duration": entry.get("duration", 0),
-                        "stream_url": entry["url"],
-                        "webpage_url": entry.get("webpage_url", ""),
-                        "is_local_file": False
-                    }
+
+                    title = getattr(media, "title", None) or getattr(media, "file_name", None) or query
+                    performer = getattr(media, "performer", None) or ""
+                    display_title = f"{performer} - {title}" if performer and performer.lower() not in title.lower() else title
+
+                    file_path = await assistant.download_media(
+                        msg,
+                        file_name=f"downloads/vk_{user_id}_{msg.id}.mp3"
+                    )
+                    if file_path and os.path.exists(file_path):
+                        return {
+                            "title": display_title,
+                            "uploader": performer or "Velvet Jukebox",
+                            "duration": duration,
+                            "stream_url": file_path,
+                            "is_local_file": True
+                        }
         except Exception as e:
-            logging.warning(f"SoundCloud fallback gagal: {e}")
-        return None
+            logging.warning(f"Inline query @{bot_username} gagal: {e}")
+            continue
 
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _sc_search)
-
-async def get_personal_audio_file(query: str, user_id: int):
-    """Ambil file MP3 lokal dari Vault atau unduh dari SoundCloud untuk /myearphone"""
-    info = await find_song_source(query, user_id)
-    if not info or info == "TOO_LONG":
-        return info
-
-    if info.get("is_local_file"):
-        return {
-            "file_path": info["stream_url"],
-            "title": info["title"],
-            "uploader": info["uploader"]
-        }
-
-    # Jika dari SoundCloud, unduh dulu ke file lokal
-    def _dl_sc():
-        out_tmpl = f"downloads/sc_{user_id}_%(id)s.%(ext)s"
-        opts = {
-            "format": "bestaudio/best",
-            "outtmpl": out_tmpl,
-            "noplaylist": True,
-            "quiet": True,
-        }
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                data = ydl.extract_info(info["webpage_url"], download=True)
-                return {
-                    "file_path": ydl.prepare_filename(data),
-                    "title": info["title"],
-                    "uploader": info["uploader"]
-                }
-        except Exception:
-            return None
-
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _dl_sc)
+    return None
 
 # --- HELPER DATABASE & HAK AKSES ---
 async def is_staff_or_owner(user_id: int) -> bool:
@@ -199,12 +202,9 @@ async def auto_leave_when_idle():
         except Exception:
             pass
 
-current_local_file = None
-
 async def play_next_song():
     global is_playing, idle_leave_task, current_local_file
 
-    # Bersihkan file sementara lagu sebelumnya jika ada
     if current_local_file and os.path.exists(current_local_file):
         try:
             os.remove(current_local_file)
@@ -222,8 +222,7 @@ async def play_next_song():
 
     is_playing = True
     track = song_queue.popleft()
-    if track.get("is_local_file"):
-        current_local_file = track["stream_url"]
+    current_local_file = track["stream_url"]
 
     await ensure_voice_chat_locked()
 
@@ -260,7 +259,7 @@ async def cmd_start_kaelen(message: types.Message):
     await message.answer(
         "🎧 <i>Jarum piringan hitam berputar perlahan di sudut ruangan...</i>\n\n"
         "<b>\"Selamat malam. Saya Kaelen, kurator musik di <i>The Velvet Hour</i>. "
-        "Gunakan perintah <code>/myearphone judul lagu</code> di sini untuk mendengarkan musik secara pribadi.\"</b>",
+        "Gunakan format <code>/myearphone Judul Lagu - Nama Penyanyi</code> di sini untuk mendengarkan musik secara pribadi.\"</b>",
         parse_mode=ParseMode.HTML
     )
 
@@ -268,9 +267,10 @@ async def cmd_start_kaelen(message: types.Message):
 @dp.message(Command("reqsong"), F.chat.id == GROUP_ID)
 async def cmd_reqsong(message: types.Message):
     query = message.text.replace("/reqsong", "").strip()
-    if not query:
+    if not query or "-" not in query:
         return await message.reply(
-            "Sebutkan judul lagu dan penyanyinya.\nContoh: <code>/reqsong Apocalypse</code>",
+            "Sertakan <b>judul lagu dan nama penyanyinya</b> agar tidak salah versi.\n"
+            "Contoh: <code>/reqsong Apocalypse - Cigarettes After Sex</code>",
             parse_mode=ParseMode.HTML
         )
 
@@ -288,11 +288,15 @@ async def cmd_reqsong(message: types.Message):
                     )
                 await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", SONG_REQ_COST, user_id)
 
-    wait_msg = await message.reply("🔎 <i>Kaelen sedang mencari piringan hitam di rak koleksi...</i>", parse_mode=ParseMode.HTML)
+    wait_msg = await message.reply(f"🔎 <i>Kaelen mencari piringan hitam <b>{query}</b>...</i>", parse_mode=ParseMode.HTML)
     info = await find_song_source(query, user_id)
 
     if not info:
-        return await wait_msg.edit_text("Lagu belum tersedia di koleksi rak musik. Coba ketik judul yang lebih singkat.")
+        return await wait_msg.edit_text(
+            "Lagu tidak ditemukan di katalog musik. Pastikan penulisan judul dan nama penyanyinya benar.\n"
+            "Contoh: <code>/reqsong Sunsetz - Cigarettes After Sex</code>",
+            parse_mode=ParseMode.HTML
+        )
     if info == "TOO_LONG":
         return await wait_msg.edit_text("Durasi lagu terlalu panjang (maksimal 8 menit).")
 
@@ -318,13 +322,16 @@ async def cmd_spinmusic(message: types.Message):
         return
 
     query = message.text.replace("/spinmusic", "").strip()
-    if not query:
-        return
+    if not query or "-" not in query:
+        return await message.reply(
+            "Gunakan format: <code>/spinmusic Judul Lagu - Nama Penyanyi</code>",
+            parse_mode=ParseMode.HTML
+        )
 
     wait_msg = await message.reply("🎧 <i>Resident DJ menyiapkan piringan hitam prioritas...</i>", parse_mode=ParseMode.HTML)
     info = await find_song_source(query, user_id)
     if not info or info == "TOO_LONG":
-        return await wait_msg.edit_text("Lagu tidak ditemukan di koleksi rak musik.")
+        return await wait_msg.edit_text("Lagu tidak ditemukan atau durasi melebihi 8 menit.")
 
     info["requester"] = f"Resident DJ {message.from_user.first_name}"
     song_queue.appendleft(info)
@@ -343,9 +350,9 @@ async def cmd_dedicate(message: types.Message):
         return
 
     raw = message.text.replace("/dedicate", "").strip()
-    if "|" not in raw or len(raw.split()) < 3:
+    if "|" not in raw or "-" not in raw or len(raw.split()) < 4:
         return await message.reply(
-            "Format dedikasi:\n<code>/dedicate @username Judul Lagu | Pesan singkat</code>",
+            "Format dedikasi:\n<code>/dedicate @username Judul Lagu - Penyanyi | Pesan singkat</code>",
             parse_mode=ParseMode.HTML
         )
 
@@ -357,7 +364,7 @@ async def cmd_dedicate(message: types.Message):
     wait_msg = await message.reply("🎶 <i>Resident DJ menyiapkan lagu dedikasi spesial...</i>", parse_mode=ParseMode.HTML)
     info = await find_song_source(query, user_id)
     if not info or info == "TOO_LONG":
-        return await wait_msg.edit_text("Lagu tidak ditemukan di koleksi rak musik.")
+        return await wait_msg.edit_text("Lagu tidak ditemukan atau durasi melebihi 8 menit.")
 
     info["requester"] = f"Resident DJ {message.from_user.first_name}"
     info["dedicate_to"] = target_user
@@ -397,24 +404,25 @@ async def cmd_stopmusic(message: types.Message):
 @dp.message(Command("myearphone"))
 async def cmd_myearphone(message: types.Message):
     query = message.text.replace("/myearphone", "").strip()
-    if not query:
+    if not query or "-" not in query:
         return await message.reply(
-            "Sebutkan judul lagu.\nContoh: <code>/myearphone Sunsetz</code>",
+            "Sertakan <b>judul lagu dan nama penyanyinya</b> agar akurat.\n"
+            "Contoh: <code>/myearphone Sunsetz - Cigarettes After Sex</code>",
             parse_mode=ParseMode.HTML
         )
 
     user_id = message.from_user.id
     status_msg = await message.reply("🎧 <i>Kaelen sedang menyiapkan headphone nirkabel khusus untukmu...</i>", parse_mode=ParseMode.HTML)
 
-    result = await get_personal_audio_file(query, user_id)
+    result = await find_song_source(query, user_id)
 
     if not result:
-        return await status_msg.edit_text("Lagu belum tersedia di rak koleksi.")
+        return await status_msg.edit_text("Lagu tidak ditemukan di katalog musik. Pastikan penulisan judul dan penyanyi benar.")
     if result == "TOO_LONG":
         return await status_msg.edit_text("Durasi lagu maksimal 8 menit.")
 
     try:
-        audio_file = types.FSInputFile(result["file_path"])
+        audio_file = types.FSInputFile(result["stream_url"])
         await bot.send_audio(
             chat_id=user_id,
             audio=audio_file,
@@ -439,22 +447,22 @@ async def cmd_myearphone(message: types.Message):
             parse_mode=ParseMode.HTML
         )
     finally:
-        if isinstance(result, dict) and os.path.exists(result["file_path"]):
-            os.remove(result["file_path"])
+        if isinstance(result, dict) and os.path.exists(result["stream_url"]):
+            os.remove(result["stream_url"])
 
 # --- REGISTER MENU COMMAND ---
 async def register_kaelen_commands():
     group_cmds = [
-        BotCommand(command="reqsong", description="Putar lagu di Voice Chat Lounge (15 VC / Gratis VIP)"),
-        BotCommand(command="myearphone", description="Kirim lagu pribadi (MP3) ke Private Chat"),
-        BotCommand(command="spinmusic", description="[Resident DJ] Putar lagu prioritas antrean teratas"),
-        BotCommand(command="dedicate", description="[Resident DJ] Dedikasikan lagu untuk tamu tertentu"),
+        BotCommand(command="reqsong", description="Putar lagu: /reqsong Judul - Penyanyi"),
+        BotCommand(command="myearphone", description="Kirim lagu pribadi: /myearphone Judul - Penyanyi"),
+        BotCommand(command="spinmusic", description="[Resident DJ] Putar lagu prioritas: /spinmusic Judul - Penyanyi"),
+        BotCommand(command="dedicate", description="[Resident DJ] Dedikasi lagu: /dedicate @user Judul - Penyanyi | Pesan"),
         BotCommand(command="skip", description="[Resident DJ] Lewati lagu yang sedang diputar"),
         BotCommand(command="stopmusic", description="[Resident DJ] Hentikan musik & bersihkan antrean"),
     ]
     private_cmds = [
         BotCommand(command="start", description="Mulai sesi dengan kurator musik Kaelen"),
-        BotCommand(command="myearphone", description="Dengarkan lagu secara pribadi di sini"),
+        BotCommand(command="myearphone", description="Dengarkan lagu pribadi: /myearphone Judul - Penyanyi"),
     ]
     await bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
     await bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
