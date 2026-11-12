@@ -13,6 +13,10 @@ from hans_concierge.helpers import (
     main_lobby_kb, info_categories_kb, back_info_kb
 )
 
+router = Router()
+
+# --- GERBANG UTAMA (/start + KODE REFERRAL) ---
+@router.message(CommandStart(), F.chat.type == "private")
 # --- GERBANG UTAMA (/start + KODE REFERRAL) ---
 @router.message(CommandStart(), F.chat.type == "private")
 async def cmd_start_hans(message: types.Message):
