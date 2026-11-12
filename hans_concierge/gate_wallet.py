@@ -6,16 +6,12 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ParseMode
 
 import shared.database as db
-from shared.config import (
-    GROUP_ID, REQUIRED_CN_SYMBOL, VIP_COST_24H, DAILY_REWARD_VC
-)
 from hans_concierge.helpers import (
-    bot, REFERRAL_BONUS_VC, DAILY_QUESTS,
+    bot, GROUP_ID, REQUIRED_CN_SYMBOL, VIP_COST_24H, DAILY_REWARD_VC,
+    REFERRAL_BONUS_VC, DAILY_QUESTS,
     get_or_create_referral_code, log_wallet_tx, add_quest_progress,
     main_lobby_kb, info_categories_kb, back_info_kb
 )
-
-router = Router()
 
 # --- GERBANG UTAMA (/start + KODE REFERRAL) ---
 @router.message(CommandStart(), F.chat.type == "private")
