@@ -1,7 +1,7 @@
 import asyncpg
 from shared.config import DATABASE_URL
 
-pool = None
+pool: asyncpg.Pool = None
 
 async def init_db():
     global pool
@@ -12,48 +12,42 @@ async def init_db():
                 user_id BIGINT PRIMARY KEY,
                 username TEXT,
                 full_name TEXT,
-                coins INT DEFAULT 0,
-                charm_points INT DEFAULT 0,
+                coins INTEGER DEFAULT 0,
+                charm_points INTEGER DEFAULT 0,
+                gifts_sent_vc INTEGER DEFAULT 0,
                 is_vip BOOLEAN DEFAULT FALSE,
                 vip_until TIMESTAMP,
                 is_admin BOOLEAN DEFAULT FALSE,
-                is_patron BOOLEAN DEFAULT FALSE,
                 is_in_bar BOOLEAN DEFAULT FALSE,
-                got_welcome BOOLEAN DEFAULT FALSE,
                 last_active TIMESTAMP DEFAULT NOW(),
                 warned_idle BOOLEAN DEFAULT FALSE,
-                last_promote TIMESTAMP,
+                total_active_mins INTEGER DEFAULT 0,
                 last_daily DATE,
-                daily_streak INT DEFAULT 0,
-                total_active_mins INT DEFAULT 0
+                last_promote TIMESTAMP
             );
         """)
+        # Tambahkan kolom gifts_sent_vc jika tabel lama sudah terlanjur dibuat
         await conn.execute("""
-            CREATE TABLE IF NOT EXISTS bar_settings (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            );
-        """)
-        await conn.execute("""
-            INSERT INTO bar_settings (key, value) 
-            VALUES ('door_password', 'VELVET26'), ('bar_open', 'true'), ('current_pin_id', '0')
-            ON CONFLICT (key) DO NOTHING;
-        """)
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS inventory (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT REFERENCES users(user_id),
-                item_code TEXT,
-                item_name TEXT,
-                sell_value INT,
-                received_at TIMESTAMP DEFAULT NOW()
-            );
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS gifts_sent_vc INTEGER DEFAULT 0;
         """)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS active_shifts (
                 role TEXT PRIMARY KEY,
-                user_id BIGINT,
-                started_at TIMESTAMP,
-                actions_count INT DEFAULT 0
+                user_id BIGINT NOT NULL,
+                started_at TIMESTAMP DEFAULT NOW(),
+                actions_count INTEGER DEFAULT 0
+            );
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS betta_catalog (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                price_vc INTEGER NOT NULL,
+                description TEXT NOT NULL,
+                media_type TEXT DEFAULT 'none',
+                media_file_id TEXT,
+                is_sold BOOLEAN DEFAULT FALSE,
+                buyer_id BIGINT,
+                created_at TIMESTAMP DEFAULT NOW()
             );
         """)
