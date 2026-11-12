@@ -14,76 +14,38 @@ GROUP_ID = cfg.GROUP_ID
 REQUIRED_CN_SYMBOL = getattr(cfg, "REQUIRED_CN_SYMBOL", "🥂")
 VIP_COST_24H = getattr(cfg, "VIP_COST_24H", 150)
 DAILY_REWARD_VC = getattr(cfg, "DAILY_REWARD_VC", 20)
-
-# --- KONFIGURASI FITUR BARU HANS ---
-REFERRAL_BONUS_VC = 50  # Bonus untuk pengundang & tamu baru setelah lolos CN
+REFERRAL_BONUS_VC = 50
 
 DAILY_QUESTS = {
     "daily_checkin": {
-        "title": "Absen Harian di Pintu Utama",
-        "desc": "Klaim /daily atau tombol Absen Harian",
+        "title": "Absen Malam Lounge",
+        "desc": "Klaim jatah absen harian (/daily) di lobi Hans.",
         "target": 1,
         "reward": 15,
     },
     "bar_social": {
-        "title": "Interaksi di Meja Bar",
-        "desc": "Kirim 1 pesanan (/order, /eat, atau /treat) di grup",
+        "title": "Penikmat Suasana Bar",
+        "desc": "Pesan minuman/makanan (/order, /eat) atau traktir tamu (/treat) di grup.",
         "target": 1,
         "reward": 20,
     },
     "music_vibe": {
-        "title": "Penikmat Alunan Lounge",
-        "desc": "Putar 1 lagu (/reqsong atau /myearphone)",
+        "title": "Kurator Nada Malam",
+        "desc": "Request lagu di jukebox grup (/reqsong) atau dengarkan lewat /myearphone.",
         "target": 1,
         "reward": 20,
     },
 }
 
-async def is_staff_or_owner(user_id: int) -> bool:
-    if user_id == OWNER_ID:
-        return True
-    async with db.pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT is_admin FROM users WHERE user_id = $1", user_id)
-        return bool(row and row["is_admin"])
-
-async def main_lobby_kb(user_id: int) -> InlineKeyboardMarkup:
-    is_admin_or_owner = await is_staff_or_owner(user_id)
-    
-    rows = [
-        [InlineKeyboardButton(text="🚪 Verifikasi & Masuk ke Bar", callback_data="enter_bar")],
-        [
-            InlineKeyboardButton(text="💰 Dompet & Mutasi", callback_data="my_wallet"),
-            InlineKeyboardButton(text="📅 Absen Harian", callback_data="claim_daily"),
-        ],
-        [
-            InlineKeyboardButton(text="🎯 Misi Harian", callback_data="daily_quests"),
-            InlineKeyboardButton(text="🎟️ Undang Teman", callback_data="my_referral"),
-        ],
-        [
-            InlineKeyboardButton(text="🍾 Beli VIP Pass (24 Jam)", callback_data="buy_vip"),
-            InlineKeyboardButton(text="🏪 Pojok Lapak Partner", callback_data="browse_lapak"),
-        ],
-        [
-            InlineKeyboardButton(text="🎁 Kirim Gift / Hadiah", callback_data="menu_gift"),
-            InlineKeyboardButton(text="📖 Buku Panduan Bar", callback_data="info_menu"),
-        ]
-    ]
-    
-    # Tombol Admin khusus Owner & Staf Admin
-    if is_admin_or_owner:
-        rows.insert(0, [InlineKeyboardButton(text="🛡️ Panel Kontrol Admin / Owner", callback_data="open_admin_panel")])
-        
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-    
 async def ensure_hans_schema():
-    """Memastikan tabel & kolom referral, misi harian, dan mutasi dompet tersedia."""
     async with db.pool.acquire() as conn:
         await conn.execute("""
             ALTER TABLE users
             ADD COLUMN IF NOT EXISTS referral_code TEXT UNIQUE,
             ADD COLUMN IF NOT EXISTS referred_by BIGINT,
             ADD COLUMN IF NOT EXISTS referral_rewarded BOOLEAN DEFAULT FALSE,
-            ADD COLUMN IF NOT EXISTS referral_count INTEGER DEFAULT 0;
+            ADD COLUMN IF NOT EXISTS referral_count INTEGER DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS vip_booth_name TEXT;
         """)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS wallet_transactions (
@@ -105,43 +67,36 @@ async def ensure_hans_schema():
             );
         """)
 
-def _generate_ref_code(user_id: int) -> str:
-    suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
-    return f"VH{str(user_id)[-4:]}{suffix}"
+async def log_wallet_tx(conn, user_id: int, amount: int, reason: str):
+    await conn.execute(
+        "INSERT INTO wallet_transactions (user_id, amount, reason, created_at) VALUES ($1, $2, $3, NOW())",
+        user_id, amount, reason
+    )
+
+async def add_quest_progress(user_id: int, quest_key: str, inc: int = 1):
+    meta = DAILY_QUESTS.get(quest_key)
+    if not meta:
+        return
+    today = datetime.utcnow().date()
+    async with db.pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO daily_quests (user_id, quest_date, quest_key, progress, claimed)
+            VALUES ($1, $2, $3, $4, FALSE)
+            ON CONFLICT (user_id, quest_date, quest_key) DO UPDATE
+            SET progress = LEAST(daily_quests.progress + $4, $5);
+        """, user_id, today, quest_key, inc, meta["target"])
 
 async def get_or_create_referral_code(user_id: int) -> str:
     async with db.pool.acquire() as conn:
         code = await conn.fetchval("SELECT referral_code FROM users WHERE user_id = $1", user_id)
         if code:
             return code
-        for _ in range(5):
-            candidate = _generate_ref_code(user_id)
-            exists = await conn.fetchval("SELECT 1 FROM users WHERE referral_code = $1", candidate)
+        while True:
+            new_code = "VH" + "".join(random.choices(string.ascii_uppercase + string.digits, k=5))
+            exists = await conn.fetchval("SELECT 1 FROM users WHERE referral_code = $1", new_code)
             if not exists:
-                await conn.execute("UPDATE users SET referral_code = $1 WHERE user_id = $2", candidate, user_id)
-                return candidate
-    return f"VH{user_id}"
-
-async def log_wallet_tx(conn, user_id: int, amount: int, reason: str):
-    """Mencatat mutasi masuk/keluar Velvet Coins ke riwayat dompet."""
-    await conn.execute(
-        "INSERT INTO wallet_transactions (user_id, amount, reason, created_at) VALUES ($1, $2, $3, NOW())",
-        user_id, amount, reason
-    )
-
-async def add_quest_progress(user_id: int, quest_key: str, step: int = 1):
-    """Menambah progres misi harian tamu."""
-    if quest_key not in DAILY_QUESTS:
-        return
-    today = datetime.utcnow().date()
-    target = DAILY_QUESTS[quest_key]["target"]
-    async with db.pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO daily_quests (user_id, quest_date, quest_key, progress, claimed)
-            VALUES ($1, $2, $3, LEAST($4, $5), FALSE)
-            ON CONFLICT (user_id, quest_date, quest_key) DO UPDATE
-            SET progress = LEAST(daily_quests.progress + $4, $5);
-        """, user_id, today, quest_key, step, target)
+                await conn.execute("UPDATE users SET referral_code = $1 WHERE user_id = $2", new_code, user_id)
+                return new_code
 
 async def is_staff_or_owner(user_id: int) -> bool:
     if user_id == OWNER_ID:
@@ -150,39 +105,45 @@ async def is_staff_or_owner(user_id: int) -> bool:
         row = await conn.fetchrow("SELECT is_admin FROM users WHERE user_id = $1", user_id)
         return bool(row and row["is_admin"])
 
-# --- KEYBOARD UTAMA & PANDUAN INFORMASI ---
-def main_lobby_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚪 Masuk ke Ruang Utama (Cek Atribut CN)", callback_data="enter_bar")],
+async def main_lobby_kb(user_id: int | None = None) -> InlineKeyboardMarkup:
+    is_admin_or_owner = await is_staff_or_owner(user_id) if user_id else False
+
+    rows = [
+        [InlineKeyboardButton(text="🚪 Verifikasi & Masuk ke Bar", callback_data="enter_bar")],
         [
             InlineKeyboardButton(text="💰 Dompet & Mutasi", callback_data="my_wallet"),
             InlineKeyboardButton(text="📅 Absen Harian", callback_data="claim_daily"),
         ],
         [
             InlineKeyboardButton(text="🎯 Misi Harian", callback_data="daily_quests"),
-            InlineKeyboardButton(text="🎟️ Undang Teman (+50 VC)", callback_data="my_referral"),
+            InlineKeyboardButton(text="🎟️ Undang Teman", callback_data="my_referral"),
         ],
         [
-            InlineKeyboardButton(text="🍾 VIP Pass (24 Jam)", callback_data="buy_vip"),
-            InlineKeyboardButton(text="🎁 Kirim Gift", callback_data="menu_gift"),
-        ],
-        [
+            InlineKeyboardButton(text="🍾 Beli VIP Pass (24 Jam)", callback_data="buy_vip"),
             InlineKeyboardButton(text="🏪 Pojok Lapak Partner", callback_data="browse_lapak"),
-            InlineKeyboardButton(text="📖 Panduan & Command Lengkap", callback_data="info_menu"),
         ],
-    ])
+        [
+            InlineKeyboardButton(text="🎁 Kirim Gift / Hadiah", callback_data="menu_gift"),
+            InlineKeyboardButton(text="📖 Buku Panduan Bar", callback_data="info_menu"),
+        ],
+    ]
+
+    if is_admin_or_owner:
+        rows.insert(0, [InlineKeyboardButton(text="🛡️ Panel Kontrol Admin / Owner", callback_data="open_admin_panel")])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def info_categories_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🥂 Command Bar, Booth & Dice (Julian)", callback_data="info_cmd_bar")],
-        [InlineKeyboardButton(text="🎶 Command Musik & Radio (Kaelen)", callback_data="info_cmd_music")],
-        [InlineKeyboardButton(text="💼 Sistem Shift Kerja & Upah VC", callback_data="info_cmd_shift")],
-        [InlineKeyboardButton(text="🎯 Ekonomi, Misi Harian & Referral", callback_data="info_economy")],
-        [InlineKeyboardButton(text="⬅️ Kembali ke Lobi Utama", callback_data="back_lobby")],
+        [InlineKeyboardButton(text="🥂 Command Bar, Menu VIP & Mini-Game", callback_data="info_cmd_bar")],
+        [InlineKeyboardButton(text="🎶 Command Musik & Jukebox (Kaelen)", callback_data="info_cmd_music")],
+        [InlineKeyboardButton(text="💼 Panduan Shift Kerja (50 VC)", callback_data="info_cmd_shift")],
+        [InlineKeyboardButton(text="🎯 Ekonomi VC, Misi & Referral", callback_data="info_economy")],
+        [InlineKeyboardButton(text="🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
     ])
 
 def back_info_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅️ Kembali ke Daftar Panduan", callback_data="info_menu")],
-        [InlineKeyboardButton(text="🏠 Lobi Utama Hans", callback_data="back_lobby")],
+        [InlineKeyboardButton(text="⬅️ Kembali ke Kategori Panduan", callback_data="info_menu")],
+        [InlineKeyboardButton(text="🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
     ])
