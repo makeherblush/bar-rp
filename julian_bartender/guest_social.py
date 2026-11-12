@@ -3,23 +3,45 @@ import random
 from datetime import datetime
 
 from aiogram import Router, F, types
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ParseMode
 
 import shared.database as db
 from shared.config import GROUP_ID
 from julian_bartender.helpers import (
-    hans_bot, DRINKS_MENU, FOODS_MENU,
-    TREAT_COST_VC, TREAT_CHARM_BONUS, DICE_MIN_BET, DICE_MAX_BET,
-    schedule_delete, reply_and_autodelete, is_staff_or_owner,
+    bot, hans_bot, DRINKS_MENU, VIP_DRINKS_MENU, FOODS_MENU, VIP_FOODS_MENU,
+    VIP_MENU_NONVIP_COST, TREAT_COST_VC, TREAT_CHARM_BONUS, DICE_MIN_BET, DICE_MAX_BET,
+    schedule_delete, reply_and_autodelete, is_staff_or_owner, is_vip_user,
     get_user_booth_tag, log_wallet_tx, add_bar_quest_progress
 )
 
 router = Router()
 
-# Penyimpanan tantangan dadu 1v1 sementara
 active_dice_challenges = {}
+
+JULIAN_RC_REPLIES = [
+    "<i>Julian menghentikan sejenak gerakannya mengelap gelas kristal, menatapmu dengan senyum tipis di balik meja bar.</i>\n\n<b>\"Ada yang bisa saya bantu racikkan malam ini, {name}? Sebutkan saja, atau gunakan <code>/order</code> untuk melihat buku menu.\"</b>",
+    "<i>Sambil memutar gelas lowball di atas meja kayu ek, Julian mengangguk ramah ke arahmu.</i>\n\n<b>\"Malam yang tenang di The Velvet Hour, {name}. Perlu minuman hangat atau sesuatu yang lebih kuat?\"</b>",
+    "<i>Julian mencondongkan tubuh sedikit ke depan meja bar, mendengarkan dengan penuh perhatian.</i>\n\n<b>\"Saya mendengarkan, {name}. Nikmati suasana lounge malam ini—beri tahu saja jika gelasmu sudah kosong.\"</b>",
+    "<i>Cahaya lampu gantung memantul di gelas shaker perak saat Julian menoleh ke arahmu.</i>\n\n<b>\"Selamat malam, {name}. Kalau butuh rekomendasi minuman atau ingin mentraktir tamu lain, tinggal panggil saja.\"</b>",
+]
+
+# --- SAMBUTAN PRIVATE CHAT (/start) ---
+@router.message(CommandStart(), F.chat.type == "private")
+async def cmd_start_julian_pc(message: types.Message):
+    await message.answer(
+        "🍸 <i>Bartender Julian menghentikan sejenak gerakannya mengelap gelas kristal, lalu menoleh ke arahmu dengan senyum tipis.</i>\n\n"
+        f"<b>\"Selamat malam, {message.from_user.first_name}. Saya Julian, kepala bartender di <i>The Velvet Hour</i>.\"</b>\n\n"
+        "Saya bertugas di meja bar kayu ek di dalam ruang lounge utama:\n"
+        "• <code>/order</code> — Buku menu minuman (Reguler Gratis & VIP)\n"
+        "• <code>/eat</code> — Buku menu hidangan dapur (Reguler Gratis & VIP)\n"
+        "• <code>/treat @username menu</code> — Traktir tamu lain (+5 Charm)\n"
+        "• <code>/dice @username 25</code> — Tantang duel dadu 1v1\n"
+        "• <code>/apply waiter</code> — Ambil shift kerja paruh waktu (50 VC)\n\n"
+        "<i>Untuk masuk ke ruang lounge utama atau mengecek dompet, silakan ketuk pintu resepsionis di <b>PC Hans</b> terlebih dahulu.</i>",
+        parse_mode=ParseMode.HTML
+    )
 
 # --- SAMBUTAN OTOMATIS SAAT TAMU BARU MASUK GRUP ---
 @router.message(F.chat.id == GROUP_ID, F.new_chat_members)
@@ -44,8 +66,8 @@ async def on_guest_enter(message: types.Message):
             "<i>Tirai beludru merah di pintu masuk tersibak perlahan. Bartender Julian mengangkat pandangan dari gelas kristal yang sedang ia lap, lalu tersenyum ramah.</i>\n\n"
             f"🥂 <b>\"Selamat malam, <a href='tg://user?id={member.id}'>{member.first_name}</a>. "
             "Selamat datang di <i>The Velvet Hour</i>.\"</b>\n\n"
-            "• <code>/order</code> — Buku menu minuman (Contoh: <code>/order negroni</code>)\n"
-            "• <code>/eat</code> — Buku menu makanan (Contoh: <code>/eat steak</code>)\n"
+            "• <code>/order</code> — Buku menu minuman (Reguler Gratis & VIP)\n"
+            "• <code>/eat</code> — Buku menu makanan (Reguler Gratis & VIP)\n"
             "• <code>/treat @user menu</code> — Traktir tamu lain (+5 Charm)\n"
             "• <code>/reqsong Judul - Penyanyi</code> — Putar lagu di ruangan",
             parse_mode=ParseMode.HTML
@@ -114,70 +136,129 @@ async def cmd_lapak_group(message: types.Message):
         reply_markup=kb
     )
 
-# --- PESAN MINUM & MAKAN (+ PROGRES MISI HARIAN) ---
+# --- PESAN MINUMAN (/order: REGULER GRATIS + EKSKLUSIF VIP) ---
 @router.message(Command("order"), F.chat.id == GROUP_ID)
-async def cmd_order(message: types.Message):
-    item_raw = message.text.replace("/order", "").strip().lower()
+async def cmd_order(message: types.Message, command: CommandObject):
+    raw_arg = (command.args or "").strip()
+    item_raw = raw_arg.lower()
+
     if not item_raw:
-        menu_list = "\n".join([f"• <code>/order {k}</code> — {v[0]}" for k, v in DRINKS_MENU.items()])
+        reg_list = "\n".join([f"• <code>/order {k}</code> — {v[0]}" for k, v in DRINKS_MENU.items()])
+        vip_list = "\n".join([f"• <code>/order {k}</code> — {v[0]}" for k, v in VIP_DRINKS_MENU.items()])
         return await reply_and_autodelete(
             message,
-            f"🍸 <b>DAFTAR MINUMAN BARTENDER JULIAN</b>\n\n{menu_list}\n\n"
+            f"🍸 <b>BUKU MENU MINUMAN — BARTENDER JULIAN</b>\n\n"
+            f"🥂 <b>MENU REGULER (GRATIS):</b>\n{reg_list}\n\n"
+            f"🍾 <b>MENU EKSKLUSIF VIP (Gratis VIP / {VIP_MENU_NONVIP_COST} VC Reguler):</b>\n{vip_list}\n\n"
             "💡 <i>Bisa juga pesan minuman bebas:\nContoh: <code>/order Iced Caramel Macchiato</code></i>",
-            90
+            110
         )
 
-    booth_tag = await get_user_booth_tag(message.from_user.id)
-    matched = next((val for key, val in DRINKS_MENU.items() if key in item_raw), None)
+    user_id = message.from_user.id
+    booth_tag = await get_user_booth_tag(user_id)
 
+    # 1. Cek Menu Eksklusif VIP
+    matched_vip = next(((k, v) for k, v in VIP_DRINKS_MENU.items() if k in item_raw), None)
+    if matched_vip:
+        _, (title, narrative) = matched_vip
+        free_vip = await is_vip_user(user_id) or await is_staff_or_owner(user_id)
+        if not free_vip:
+            async with db.pool.acquire() as conn:
+                async with conn.transaction():
+                    coins = await conn.fetchval("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", user_id)
+                    if (coins or 0) < VIP_MENU_NONVIP_COST:
+                        return await reply_and_autodelete(
+                            message,
+                            f"🍾 <i>Menu ini khusus <b>VIP Reserve</b> (Gratis untuk VIP, atau butuh <b>{VIP_MENU_NONVIP_COST} VC</b> untuk tamu reguler).</i>",
+                            60
+                        )
+                    await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", VIP_MENU_NONVIP_COST, user_id)
+                    await log_wallet_tx(conn, user_id, -VIP_MENU_NONVIP_COST, "Pesan minuman VIP Reserve")
+
+        badge_cost = "<i>(🍾 VIP Complimentary)</i>" if free_vip else f"<i>(💳 {VIP_MENU_NONVIP_COST} VC)</i>"
+        text = f"{title} {badge_cost}\n\n{narrative}\n\n<i>— Disajikan khusus untuk <b>{message.from_user.first_name}</b>{booth_tag}.</i>"
+        await add_bar_quest_progress(user_id)
+        return await reply_and_autodelete(message, text, 120)
+
+    # 2. Cek Menu Reguler Gratis
+    matched = next((val for key, val in DRINKS_MENU.items() if key in item_raw), None)
     if matched:
         title, narrative = matched
         text = f"{title}\n\n{narrative}\n\n<i>— Disajikan untuk <b>{message.from_user.first_name}</b>{booth_tag}.</i>"
     else:
-        custom_name = message.text.replace("/order", "").strip()
         text = (
-            f"🍸 <b>Pesanan Khusus: {custom_name}</b>\n\n"
-            f"<i>Julian mengangguk paham, meracik bahan pilihan di balik meja bar kayu ek, lalu menggeser gelas <b>{custom_name}</b> ke hadapanmu.</i>\n\n"
+            f"🍸 <b>Pesanan Khusus: {raw_arg}</b>\n\n"
+            f"<i>Julian mengangguk paham, meracik bahan pilihan di balik meja bar kayu ek, lalu menggeser gelas <b>{raw_arg}</b> ke hadapanmu.</i>\n\n"
             f"<b>\"Racikan khusus sesuai permintaanmu. Selamat menikmati malam, {message.from_user.first_name}.\"</b>{booth_tag}"
         )
 
-    await add_bar_quest_progress(message.from_user.id)
+    await add_bar_quest_progress(user_id)
     await reply_and_autodelete(message, text, 120)
 
+# --- PESAN MAKANAN (/eat: REGULER GRATIS + EKSKLUSIF VIP) ---
 @router.message(Command("eat"), F.chat.id == GROUP_ID)
-async def cmd_eat(message: types.Message):
-    item_raw = message.text.replace("/eat", "").strip().lower()
+async def cmd_eat(message: types.Message, command: CommandObject):
+    raw_arg = (command.args or "").strip()
+    item_raw = raw_arg.lower()
+
     if not item_raw:
-        menu_list = "\n".join([f"• <code>/eat {k}</code> — {v[0]}" for k, v in FOODS_MENU.items()])
+        reg_list = "\n".join([f"• <code>/eat {k}</code> — {v[0]}" for k, v in FOODS_MENU.items()])
+        vip_list = "\n".join([f"• <code>/eat {k}</code> — {v[0]}" for k, v in VIP_FOODS_MENU.items()])
         return await reply_and_autodelete(
             message,
-            f"🍽️ <b>DAFTAR HIDANGAN DAPUR (WAITRESS CLARA)</b>\n\n{menu_list}\n\n"
+            f"🍽️ <b>BUKU MENU HIDANGAN DAPUR (WAITRESS CLARA)</b>\n\n"
+            f"🥂 <b>HIDANGAN REGULER (GRATIS):</b>\n{reg_list}\n\n"
+            f"🍾 <b>HIDANGAN EKSKLUSIF VIP (Gratis VIP / {VIP_MENU_NONVIP_COST} VC Reguler):</b>\n{vip_list}\n\n"
             "💡 <i>Bisa juga pesan makanan bebas:\nContoh: <code>/eat Ramen Pedas Hangat</code></i>",
-            90
+            110
         )
 
-    booth_tag = await get_user_booth_tag(message.from_user.id)
-    matched = next((val for key, val in FOODS_MENU.items() if key in item_raw), None)
+    user_id = message.from_user.id
+    booth_tag = await get_user_booth_tag(user_id)
 
+    # 1. Cek Hidangan Eksklusif VIP
+    matched_vip = next(((k, v) for k, v in VIP_FOODS_MENU.items() if k in item_raw), None)
+    if matched_vip:
+        _, (title, narrative) = matched_vip
+        free_vip = await is_vip_user(user_id) or await is_staff_or_owner(user_id)
+        if not free_vip:
+            async with db.pool.acquire() as conn:
+                async with conn.transaction():
+                    coins = await conn.fetchval("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", user_id)
+                    if (coins or 0) < VIP_MENU_NONVIP_COST:
+                        return await reply_and_autodelete(
+                            message,
+                            f"🍾 <i>Hidangan ini khusus <b>VIP Reserve</b> (Gratis untuk VIP, atau butuh <b>{VIP_MENU_NONVIP_COST} VC</b> untuk tamu reguler).</i>",
+                            60
+                        )
+                    await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", VIP_MENU_NONVIP_COST, user_id)
+                    await log_wallet_tx(conn, user_id, -VIP_MENU_NONVIP_COST, "Pesan hidangan VIP Reserve")
+
+        badge_cost = "<i>(🍾 VIP Complimentary)</i>" if free_vip else f"<i>(💳 {VIP_MENU_NONVIP_COST} VC)</i>"
+        text = f"{title} {badge_cost}\n\n{narrative}\n\n<i>— Diantarkan khusus ke meja <b>{message.from_user.first_name}</b>{booth_tag}.</i>"
+        await add_bar_quest_progress(user_id)
+        return await reply_and_autodelete(message, text, 120)
+
+    # 2. Cek Hidangan Reguler Gratis
+    matched = next((val for key, val in FOODS_MENU.items() if key in item_raw), None)
     if matched:
         title, narrative = matched
         text = f"{title}\n\n{narrative}\n\n<i>— Diantarkan ke meja <b>{message.from_user.first_name}</b>{booth_tag}.</i>"
     else:
-        custom_food = message.text.replace("/eat", "").strip()
         text = (
-            f"🍽️ <b>Hidangan Khusus: {custom_food}</b>\n\n"
-            f"<i>Waitress Clara keluar dari pintu dapur membawa nampan perak hangat, lalu meletakkan <b>{custom_food}</b> di mejamu dengan senyum ramah.</i>\n\n"
+            f"🍽️ <b>Hidangan Khusus: {raw_arg}</b>\n\n"
+            f"<i>Waitress Clara keluar dari pintu dapur membawa nampan perak hangat, lalu meletakkan <b>{raw_arg}</b> di mejamu dengan senyum ramah.</i>\n\n"
             f"<b>\"Pesanan dari dapur sudah siap. Silakan dinikmati, {message.from_user.first_name}.\"</b>{booth_tag}"
         )
 
-    await add_bar_quest_progress(message.from_user.id)
+    await add_bar_quest_progress(user_id)
     await reply_and_autodelete(message, text, 120)
 
-# --- TRAKTIR TAMU LAIN (/treat) + MUTASI DOMPET & MISI HARIAN ---
+# --- TRAKTIR TAMU LAIN (/treat) ---
 @router.message(Command("treat"), F.chat.id == GROUP_ID)
-async def cmd_treat(message: types.Message):
+async def cmd_treat(message: types.Message, command: CommandObject):
     sender = message.from_user
-    raw = message.text.replace("/treat", "").strip()
+    raw = (command.args or "").strip()
 
     target_user_id = None
     target_display_name = None
@@ -202,7 +283,7 @@ async def cmd_treat(message: types.Message):
             message,
             f"🥂 <b>TRAKTIR TAMU LAIN ({TREAT_COST_VC} VC — +{TREAT_CHARM_BONUS} CHARM PENERIMA)</b>\n\n"
             "• <b>Cara 1:</b> <code>/treat @username [nama menu/bebas]</code>\n"
-            "  Contoh: <code>/treat @clara negroni</code>\n"
+            "  Contoh: <code>/treat @clara negroni</code> atau <code>/treat @clara vip_dom</code>\n"
             "• <b>Cara 2:</b> Balas (reply) pesan tamu lalu ketik <code>/treat [nama menu]</code>",
             90
         )
@@ -213,8 +294,12 @@ async def cmd_treat(message: types.Message):
     lower_item = item_raw.lower()
     if lower_item in DRINKS_MENU:
         item_display = DRINKS_MENU[lower_item][0]
+    elif lower_item in VIP_DRINKS_MENU:
+        item_display = VIP_DRINKS_MENU[lower_item][0]
     elif lower_item in FOODS_MENU:
         item_display = FOODS_MENU[lower_item][0]
+    elif lower_item in VIP_FOODS_MENU:
+        item_display = VIP_FOODS_MENU[lower_item][0]
     else:
         item_display = f"<b>{item_raw}</b>"
 
@@ -244,9 +329,9 @@ async def cmd_treat(message: types.Message):
 
 # --- RESERVASI PRIVATE VIP BOOTH (/booth) ---
 @router.message(Command("booth"), F.chat.id == GROUP_ID)
-async def cmd_booth(message: types.Message):
+async def cmd_booth(message: types.Message, command: CommandObject):
     user_id = message.from_user.id
-    booth_name = message.text.replace("/booth", "").strip()
+    booth_name = (command.args or "").strip()
 
     async with db.pool.acquire() as conn:
         now = datetime.utcnow()
@@ -296,11 +381,11 @@ async def cmd_booth(message: types.Message):
         120
     )
 
-# --- MINI-GAME DADU MEJA BAR 1V1 (/dice) + MUTASI DOMPET ---
+# --- MINI-GAME DADU MEJA BAR 1V1 (/dice) ---
 @router.message(Command("dice"), F.chat.id == GROUP_ID)
-async def cmd_dice(message: types.Message):
+async def cmd_dice(message: types.Message, command: CommandObject):
     challenger = message.from_user
-    raw = message.text.replace("/dice", "").strip()
+    raw = (command.args or "").strip()
     parts = raw.split()
 
     if len(parts) < 2 or not parts[0].startswith("@") or not parts[1].isdigit():
@@ -440,7 +525,7 @@ async def cb_dice_decline(call: types.CallbackQuery):
         parse_mode=ParseMode.HTML
     )
 
-# --- ROULETTE SOLO (/mystery) + MUTASI DOMPET ---
+# --- ROULETTE SOLO (/mystery) ---
 @router.message(Command("mystery"), F.chat.id == GROUP_ID)
 async def cmd_mystery(message: types.Message):
     user_id = message.from_user.id
@@ -472,8 +557,8 @@ async def cmd_mystery(message: types.Message):
 
 # --- SOSIAL & PRESENSI ---
 @router.message(Command("toast"), F.chat.id == GROUP_ID)
-async def cmd_toast(message: types.Message):
-    target = message.text.replace("/toast", "").strip()
+async def cmd_toast(message: types.Message, command: CommandObject):
+    target = (command.args or "").strip()
     if not target and message.reply_to_message:
         target = message.reply_to_message.from_user.first_name
     if not target:
@@ -560,3 +645,27 @@ async def cmd_checkout(message: types.Message):
             await hans_bot.unban_chat_member(GROUP_ID, user_id)
         except Exception:
             pass
+
+# --- INTERAKSI RC / OBROLAN RP DENGAN BARTENDER JULIAN ---
+@router.message(F.chat.id == GROUP_ID, F.text, ~F.text.startswith("/"))
+async def on_julian_rc_interaction(message: types.Message):
+    if message.from_user.is_bot:
+        return
+
+    me = await bot.get_me()
+    bot_username = (me.username or "").lower()
+    text_lower = message.text.lower()
+
+    is_reply_to_julian = bool(
+        message.reply_to_message
+        and message.reply_to_message.from_user
+        and message.reply_to_message.from_user.id == me.id
+    )
+    is_mentioned = bool(bot_username and f"@{bot_username}" in text_lower)
+    is_called_name = "julian" in text_lower.split()
+
+    if not (is_reply_to_julian or is_mentioned or is_called_name):
+        return
+
+    reply_text = random.choice(JULIAN_RC_REPLIES).format(name=message.from_user.first_name)
+    await reply_and_autodelete(message, reply_text, 90)
