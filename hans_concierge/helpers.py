@@ -1,6 +1,6 @@
 import random
 import string
-from datetime import datetime, date
+from datetime import datetime
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -64,6 +64,27 @@ async def ensure_hans_schema():
                 progress INTEGER DEFAULT 0,
                 claimed BOOLEAN DEFAULT FALSE,
                 PRIMARY KEY (user_id, quest_date, quest_key)
+            );
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS partner_shops (
+                id SERIAL PRIMARY KEY,
+                owner_id BIGINT NOT NULL,
+                owner_username TEXT,
+                shop_name TEXT NOT NULL,
+                created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()
+            );
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS shop_items (
+                id SERIAL PRIMARY KEY,
+                shop_id INTEGER NOT NULL REFERENCES partner_shops(id) ON DELETE CASCADE,
+                title TEXT NOT NULL,
+                file_id TEXT NOT NULL,
+                file_type TEXT NOT NULL DEFAULT 'photo',
+                price_vc INTEGER NOT NULL,
+                is_sold BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()
             );
         """)
 
