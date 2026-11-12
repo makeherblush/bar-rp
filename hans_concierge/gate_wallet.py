@@ -17,14 +17,13 @@ router = Router()
 
 # --- GERBANG UTAMA (/start + KODE REFERRAL) ---
 @router.message(CommandStart(), F.chat.type == "private")
-# --- GERBANG UTAMA (/start + KODE REFERRAL) ---
+# --- GERBANG UTAMA (/start) ---
 @router.message(CommandStart(), F.chat.type == "private")
 async def cmd_start_hans(message: types.Message):
     user = message.from_user
     args = message.text.split(maxsplit=1)
     ref_param = args[1].strip() if len(args) > 1 else ""
 
-    # Deep link langsung ke lapak
     if ref_param == "lapak":
         from hans_concierge.shop_gift import send_lapak_list
         return await send_lapak_list(message)
@@ -53,7 +52,52 @@ async def cmd_start_hans(message: types.Message):
         f"Sebelum melangkah masuk ke ruang lounge utama, pastikan nama tampilan Telegram kamu menyertakan simbol resmi bar: <b>{REQUIRED_CN_SYMBOL}</b>.\n\n"
         "<i>Gunakan panel resepsionis di bawah ini untuk masuk ke ruangan, memeriksa mutasi dompet, menyelesaikan misi harian, atau mengundang teman:</i>"
     )
-    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=main_lobby_kb())
+    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=await main_lobby_kb(user.id))
+
+@router.callback_query(F.data == "back_lobby")
+async def cb_back_lobby(call: types.CallbackQuery):
+    await call.answer()
+    await call.message.edit_text(
+        f"🏛️ <b>LOBI RESEPSIONIS — THE VELVET HOUR</b>\n\n"
+        f"<i>Hans merapikan buku tamu kulit di atas meja mahoni.</i>\n"
+        f"Silakan pilih layanan yang kamu perlukan, <b>{html.escape(call.from_user.first_name)}</b>:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=await main_lobby_kb(call.from_user.id)
+    )
+
+# --- TOMBOL INTERAKTIF PANEL ADMIN DI LOBI ---
+@router.callback_query(F.data == "open_admin_panel")
+async def cb_open_admin_panel(call: types.CallbackQuery):
+    user_id = call.from_user.id
+    if not await is_staff_or_owner(user_id):
+        return await call.answer("Akses ditolak. Menu ini khusus Staf Admin dan Owner.", show_alert=True)
+    
+    await call.answer()
+    is_owner = (user_id == OWNER_ID)
+    
+    if is_owner:
+        text = (
+            "👑 <b>PANEL KONTROL UTAMA — OWNER THE VELVET HOUR</b>\n\n"
+            "<i>Gunakan perintah berikut di chat pribadi Hans untuk mengelola bar:</i>\n\n"
+            "• <code>/addshop @username Nama Toko</code> — Daftarkan lapak partner baru\n"
+            "• <code>/delshop ID_Toko</code> — Hapus lapak partner\n"
+            "• <code>/givevc @username jumlah</code> — Suntik saldo VC ke tamu\n"
+            "• <code>/addadmin @username</code> — Angkat Staf Admin baru\n"
+            "• <code>/deladmin @username</code> — Cabut akses Staf Admin"
+        )
+    else:
+        text = (
+            "🛡️ <b>PANEL STAF ADMIN — THE VELVET HOUR</b>\n\n"
+            "<i>Gunakan perintah berikut di chat pribadi Hans untuk mengelola lapak:</i>\n\n"
+            "• <code>/addshop @username Nama Toko</code> — Daftarkan lapak partner baru\n"
+            "• <code>/delshop ID_Toko</code> — Hapus lapak partner\n\n"
+            "<i>(Catatan: Pengangkatan admin dan penyuntikan koin VC /givevc merupakan hak eksklusif Owner).</i>"
+        )
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Kembali ke Lobi Utama", callback_data="back_lobby")]
+    ])
+    await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
 
 @router.callback_query(F.data == "back_lobby")
 async def cb_back_lobby(call: types.CallbackQuery):
