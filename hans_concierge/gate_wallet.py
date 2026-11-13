@@ -1,10 +1,11 @@
+import io
 import html
 from datetime import datetime, timedelta
 from aiogram import Router, F, types
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from aiogram.enums import ParseMode
 
 import shared.database as db
@@ -14,12 +15,45 @@ from hans_concierge.helpers import (
     get_or_create_referral_code, log_wallet_tx, add_quest_progress,
     insufficient_vc_kb, main_lobby_kb, info_categories_kb, back_info_kb
 )
+from hans_concierge.card_gen import (
+    generate_member_card, EFFECT_CONFETTI, EFFECT_FIRE
+)
 
 router = Router()
 
 
 class GatePasswordState(StatesGroup):
     waiting_password = State()
+
+
+async def _fetch_user_avatar_bytes(user_id: int) -> bytes | None:
+    """Mengunduh foto profil Telegram terbaru milik user dalam memori."""
+    try:
+        photos = await bot.get_user_profile_photos(user_id=user_id, limit=1)
+        if not photos.photos:
+            return None
+        # Ambil ukuran menengah/besar dari foto pertama
+        best_photo = photos.photos[0][-1]
+        file_info = await bot.get_file(best_photo.file_id)
+        buf = io.BytesIO()
+        await bot.download_file(file_info.file_path, destination=buf)
+        buf.seek(0)
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
+async def _send_or_edit_lobby(target: types.Message | types.CallbackQuery, text: str, kb: InlineKeyboardMarkup, effect_id: str | None = None):
+    if isinstance(target, types.CallbackQuery):
+        msg = target.message
+        if msg.photo or effect_id:
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            return await msg.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb, message_effect_id=effect_id)
+        return await msg.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    return await target.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb, message_effect_id=effect_id)
 
 
 # --- GERBANG UTAMA (/start + KODE REFERRAL) ---
@@ -34,9 +68,11 @@ async def cmd_start_hans(message: types.Message, state: FSMContext):
         from hans_concierge.shop_gift import send_lapak_list
         return await send_lapak_list(message)
 
+    is_new_guest = False
     async with db.pool.acquire() as conn:
         existing = await conn.fetchrow("SELECT user_id, coins FROM users WHERE user_id = $1", user.id)
         if not existing:
+            is_new_guest = True
             referrer_id = None
             if ref_param.startswith("ref_"):
                 ref_code = ref_param.replace("ref_", "").strip().upper()
@@ -70,9 +106,14 @@ async def cmd_start_hans(message: types.Message, state: FSMContext):
         f"<b>\"Selamat malam, {html.escape(user.first_name)}. Saya Hans, Kepala Concierge di <i>The Velvet Hour</i>.\"</b>\n\n"
         f"• <b>Status CN:</b> {cn_badge}\n"
         f"• <b>Saldo Dompet:</b> <b>{cur_coins} VC</b>\n\n"
-        "<i>Gunakan panel resepsionis di bawah ini untuk masuk ke ruangan, mengirim curhat/PM ke channel, memeriksa mutasi dompet, atau mengundang teman:</i>"
+        "<i>Gunakan panel resepsionis di bawah ini untuk masuk ke ruangan, mengirim curhat/PM ke channel, memeriksa kartu member & mutasi dompet, atau mengundang teman:</i>"
     )
-    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=await main_lobby_kb(user.id))
+    await message.answer(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=await main_lobby_kb(user.id),
+        message_effect_id=EFFECT_CONFETTI if is_new_guest else None,
+    )
 
 
 @router.callback_query(F.data == "back_lobby")
@@ -83,19 +124,19 @@ async def cb_back_lobby(call: types.CallbackQuery, state: FSMContext):
     async with db.pool.acquire() as conn:
         coins = await conn.fetchval("SELECT coins FROM users WHERE user_id = $1", user.id) or 0
 
-    await call.message.edit_text(
+    text = (
         f"🏛️ <b>LOBI RESEPSIONIS — THE VELVET HOUR</b>\n\n"
         f"<i>Hans merapikan buku tamu kulit di atas meja mahoni.</i>\n"
         f"Tamu: <b>{html.escape(user.first_name)}</b> | Saldo: <b>{coins} VC</b>\n\n"
-        f"Silakan pilih layanan yang kamu perlukan:",
-        parse_mode=ParseMode.HTML,
-        reply_markup=await main_lobby_kb(user.id)
+        f"Silakan pilih layanan yang kamu perlukan:"
     )
+    await _send_or_edit_lobby(call, text, await main_lobby_kb(user.id))
 
 
 # --- VERIFIKASI MASUK BAR (+ CEK CN DETAIL & PASSWORD PINTU) ---
 async def _grant_bar_entry(user: types.User, target_msg: types.Message, edit: bool = True):
     ref_bonus_note = ""
+    has_ref_bonus = False
     async with db.pool.acquire() as conn:
         async with conn.transaction():
             row = await conn.fetchrow(
@@ -103,6 +144,7 @@ async def _grant_bar_entry(user: types.User, target_msg: types.Message, edit: bo
                 user.id
             )
             if row and row["referred_by"] and not row["referral_rewarded"]:
+                has_ref_bonus = True
                 ref_id = row["referred_by"]
                 await conn.execute(
                     "UPDATE users SET coins = coins + $1, referral_rewarded = TRUE WHERE user_id = $2",
@@ -134,10 +176,20 @@ async def _grant_bar_entry(user: types.User, target_msg: types.Message, edit: bo
             f"{ref_bonus_note}\n"
             "<i>Hans membukakan pintu kayu mahoni dan mempersilakanmu masuk. Tautan pintu sekali pakai di bawah ini berlaku selama 10 menit:</i>"
         )
-        if edit:
+        if edit and not has_ref_bonus:
             await target_msg.edit_text(out, parse_mode=ParseMode.HTML, reply_markup=kb)
         else:
-            await target_msg.answer(out, parse_mode=ParseMode.HTML, reply_markup=kb)
+            if edit:
+                try:
+                    await target_msg.delete()
+                except Exception:
+                    pass
+            await target_msg.answer(
+                out,
+                parse_mode=ParseMode.HTML,
+                reply_markup=kb,
+                message_effect_id=EFFECT_CONFETTI if has_ref_bonus else None,
+            )
     except Exception as e:
         err_out = (
             f"⚠️ <b>Gagal membuat tautan masuk otomatis</b>\n"
@@ -216,12 +268,20 @@ async def fsm_check_door_password(message: types.Message, state: FSMContext):
     )
 
 
-# --- DOMPET & RIWAYAT MUTASI TRANSAKSI ---
+# --- DOMPET & KARTU MEMBER VISUAL (AUTO NAMA, USN & PP TELEGRAM) ---
 @router.callback_query(F.data == "my_wallet")
 async def cb_my_wallet(call: types.CallbackQuery):
-    await call.answer()
-    user_id = call.from_user.id
+    await call.answer("Mencetak kartu keanggotaan...")
+    user = call.from_user
+    user_id = user.id
+    ref_code = await get_or_create_referral_code(user_id)
+    avatar_bytes = await _fetch_user_avatar_bytes(user_id)
+
     async with db.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET username = $1, full_name = $2 WHERE user_id = $3",
+            user.username or "NoUsername", user.full_name, user_id
+        )
         row = await conn.fetchrow(
             "SELECT coins, charm_points, is_vip, vip_until, vip_booth_name FROM users WHERE user_id = $1",
             user_id
@@ -234,8 +294,20 @@ async def cb_my_wallet(call: types.CallbackQuery):
     coins = row["coins"] if row else 0
     charm = row["charm_points"] if row else 0
     is_vip = bool(row and row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
-    vip_txt = f"🍾 VIP Reserve (s/d {row['vip_until'].strftime('%d %b %H:%M UTC')})" if is_vip else "🥂 Regular Guest"
-    booth_txt = f"\n• <b>Booth Aktif:</b> {html.escape(row['vip_booth_name'])}" if (is_vip and row.get("vip_booth_name")) else ""
+    vip_until_str = row["vip_until"].strftime("%d %b %H:%M UTC") if is_vip else ""
+    booth_name = (row["vip_booth_name"] or "") if row else ""
+
+    card_bytes = generate_member_card(
+        full_name=user.full_name,
+        username=user.username or "",
+        coins=coins,
+        charm=charm,
+        is_vip=is_vip,
+        vip_until_str=vip_until_str,
+        booth_name=booth_name,
+        ref_code=ref_code,
+        avatar_bytes=avatar_bytes,
+    )
 
     if txs:
         tx_lines = []
@@ -248,18 +320,26 @@ async def cb_my_wallet(call: types.CallbackQuery):
     else:
         mutasi_block = "<i>Belum ada catatan transaksi terbaru.</i>"
 
-    text = (
-        f"💰 <b>DOMPET & MUTASI — {html.escape(call.from_user.first_name)}</b>\n\n"
-        f"• <b>Saldo Velvet Coins:</b> {coins} VC\n"
-        f"• <b>Charm Points:</b> {charm} Poin\n"
-        f"• <b>Status Keanggotaan:</b> {vip_txt}{booth_txt}\n\n"
-        f"📜 <b>Mutasi Transaksi Terakhir:</b>\n{mutasi_block}"
+    caption = (
+        f"💳 <b>KARTU KEANGGOTAAN — {html.escape(user.full_name)}</b>\n\n"
+        f"📜 <b>Riwayat Transaksi Terakhir:</b>\n{mutasi_block}"
     )
-    await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=await main_lobby_kb(user_id))
+
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+
+    await call.message.answer_photo(
+        photo=BufferedInputFile(card_bytes, filename=f"velvet_card_{user_id}.png"),
+        caption=caption,
+        parse_mode=ParseMode.HTML,
+        reply_markup=await main_lobby_kb(user_id),
+    )
 
 
-# --- ABSEN HARIAN (/daily & TOMBOL) ---
-async def _process_daily_claim(user_id: int, full_name: str) -> str:
+# --- ABSEN HARIAN (/daily & TOMBOL + EFEK API) ---
+async def _process_daily_claim(user_id: int, full_name: str) -> tuple[str, bool]:
     today = datetime.utcnow().date()
     async with db.pool.acquire() as conn:
         async with conn.transaction():
@@ -268,7 +348,8 @@ async def _process_daily_claim(user_id: int, full_name: str) -> str:
                 return (
                     f"⏳ <b>Jatah Absen Hari Ini Sudah Diambil</b>\n\n"
                     f"Saldo kamu saat ini: <b>{row['coins'] or 0} VC</b>.\n"
-                    f"<i>Kembali lagi besok (reset pukul 00:00 UTC) atau selesaikan Misi Harian untuk bonus VC tambahan!</i>"
+                    f"<i>Kembali lagi besok (reset pukul 00:00 UTC) atau selesaikan Misi Harian untuk bonus VC tambahan!</i>",
+                    False,
                 )
             new_bal = (row["coins"] if row else 0) + DAILY_REWARD_VC
             await conn.execute(
@@ -280,21 +361,32 @@ async def _process_daily_claim(user_id: int, full_name: str) -> str:
     return (
         f"📅 <b>ABSEN HARIAN BERHASIL!</b>\n\n"
         f"<i>Hans menyerahkan amplop beludru berisi <b>+{DAILY_REWARD_VC} Velvet Coins</b> kepada <b>{html.escape(full_name)}</b>.</i>\n"
-        f"• <b>Saldo Sekarang:</b> <b>{new_bal} VC</b>"
+        f"• <b>Saldo Sekarang:</b> <b>{new_bal} VC</b>",
+        True,
     )
 
 
 @router.message(Command("daily"), F.chat.type == "private")
 async def cmd_daily_pc(message: types.Message):
-    res = await _process_daily_claim(message.from_user.id, message.from_user.first_name)
-    await message.answer(res, parse_mode=ParseMode.HTML, reply_markup=await main_lobby_kb(message.from_user.id))
+    res, claimed_now = await _process_daily_claim(message.from_user.id, message.from_user.first_name)
+    await message.answer(
+        res,
+        parse_mode=ParseMode.HTML,
+        reply_markup=await main_lobby_kb(message.from_user.id),
+        message_effect_id=EFFECT_FIRE if claimed_now else None,
+    )
 
 
 @router.callback_query(F.data == "claim_daily")
 async def cb_claim_daily(call: types.CallbackQuery):
     await call.answer()
-    res = await _process_daily_claim(call.from_user.id, call.from_user.first_name)
-    await call.message.edit_text(res, parse_mode=ParseMode.HTML, reply_markup=await main_lobby_kb(call.from_user.id))
+    res, claimed_now = await _process_daily_claim(call.from_user.id, call.from_user.first_name)
+    await _send_or_edit_lobby(
+        call,
+        res,
+        await main_lobby_kb(call.from_user.id),
+        effect_id=EFFECT_FIRE if claimed_now else None,
+    )
 
 
 # --- MISI HARIAN ---
@@ -330,13 +422,12 @@ async def cb_daily_quests(call: types.CallbackQuery):
         lines.append(f"• <b>{meta['title']}</b>\n  {meta['desc']}\n  {status}")
 
     buttons.append([InlineKeyboardButton(text="🏠 Kembali ke Lobi Utama", callback_data="back_lobby")])
-    await call.message.edit_text(
+    text = (
         "🎯 <b>MISI HARIAN — THE VELVET HOUR</b>\n"
         "<i>Selesaikan aktivitas ringan setiap hari untuk mendapatkan bonus Velvet Coins:</i>\n\n"
-        + "\n\n".join(lines),
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+        + "\n\n".join(lines)
     )
+    await _send_or_edit_lobby(call, text, InlineKeyboardMarkup(inline_keyboard=buttons))
 
 
 @router.callback_query(F.data.startswith("claimq_"))
@@ -393,10 +484,10 @@ async def cb_my_referral(call: types.CallbackQuery):
         f"• <b>Total Teman Berhasil Diundang:</b> {total_invited} orang\n"
         f"• <b>Tautan Undanganmu (klik untuk salin):</b>\n<code>{ref_link}</code>"
     )
-    await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=await main_lobby_kb(user_id))
+    await _send_or_edit_lobby(call, text, await main_lobby_kb(user_id))
 
 
-# --- BELI VIP PASS (24 JAM) ---
+# --- BELI VIP PASS (24 JAM + EFEK KONFETI LAYAR PENUH) ---
 @router.callback_query(F.data == "buy_vip")
 async def cb_buy_vip(call: types.CallbackQuery):
     user_id = call.from_user.id
@@ -407,13 +498,13 @@ async def cb_buy_vip(call: types.CallbackQuery):
             if coins < VIP_COST_24H:
                 kurang = VIP_COST_24H - coins
                 await call.answer(f"Saldo kurang {kurang} VC!", show_alert=True)
-                return await call.message.edit_text(
+                return await _send_or_edit_lobby(
+                    call,
                     f"💸 <b>SALDO VELVET COINS BELUM MENCUKUPI</b>\n\n"
                     f"• <b>Harga VIP Pass (24 Jam):</b> {VIP_COST_24H} VC\n"
                     f"• <b>Saldo kamu saat ini:</b> {coins} VC (Kurang <b>{kurang} VC</b>)\n\n"
                     f"<i>Kumpulkan VC gratis dari Absen Harian, Misi Harian, atau chat RP di grup utama:</i>",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=insufficient_vc_kb(coins, VIP_COST_24H)
+                    insufficient_vc_kb(coins, VIP_COST_24H),
                 )
 
             now = datetime.utcnow()
@@ -427,7 +518,7 @@ async def cb_buy_vip(call: types.CallbackQuery):
             await log_wallet_tx(conn, user_id, -VIP_COST_24H, "Aktivasi VIP Reserve Pass (24 Jam)")
 
     await call.answer("VIP Pass aktif selama 24 jam!", show_alert=True)
-    await call.message.edit_text(
+    vip_text = (
         f"🍾 <b>VIP RESERVE PASS AKTIF!</b>\n\n"
         f"• <b>Berlaku hingga:</b> {new_until.strftime('%d %b %Y %H:%M UTC')}\n"
         f"• <b>Sisa Saldo:</b> {coins - VIP_COST_24H} VC\n\n"
@@ -436,21 +527,20 @@ async def cb_buy_vip(call: types.CallbackQuery):
         f"  2. Gratis menu makanan & minuman eksklusif VIP (<code>/order</code> & <code>/eat</code>)\n"
         f"  3. Gratis kirim Curhat (#confess) & PM (#pm) ke Channel\n"
         f"  4. Reservasi meja eksklusif (<code>/booth Nama Booth</code>)\n"
-        f"  5. Batas anti-idle 2x lebih lama (120 menit)",
-        parse_mode=ParseMode.HTML,
-        reply_markup=await main_lobby_kb(user_id)
+        f"  5. Batas anti-idle 2x lebih lama (120 menit)"
     )
+    await _send_or_edit_lobby(call, vip_text, await main_lobby_kb(user_id), effect_id=EFFECT_CONFETTI)
 
 
 # --- MENU PANDUAN & COMMAND LENGKAP ---
 @router.callback_query(F.data == "info_menu")
 async def cb_info_menu(call: types.CallbackQuery):
     await call.answer()
-    await call.message.edit_text(
+    await _send_or_edit_lobby(
+        call,
         "📖 <b>BUKU PANDUAN & COMMAND — THE VELVET HOUR</b>\n\n"
         "<i>Pilih kategori di bawah ini untuk melihat seluruh perintah dan contoh penggunaannya di dalam bar:</i>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=info_categories_kb()
+        info_categories_kb(),
     )
 
 
