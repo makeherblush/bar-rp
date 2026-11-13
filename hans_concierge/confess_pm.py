@@ -1,4 +1,5 @@
 import html
+from datetime import datetime
 from aiogram import Router, F, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -8,8 +9,8 @@ from aiogram.enums import ParseMode
 
 import shared.database as db
 from hans_concierge.helpers import (
-    bot, OWNER_ID, CHANNEL_ID, CONFESS_COST_VC, PM_COST_VC,
-    get_bar_setting, log_wallet_tx, main_lobby_kb
+    bot, CHANNEL_ID, CONFESS_COST_VC, PM_COST_VC,
+    get_bar_setting, log_wallet_tx, insufficient_vc_kb, main_lobby_kb
 )
 
 router = Router()
@@ -25,6 +26,16 @@ async def _resolve_channel_id() -> int | str | None:
         return int(db_ch) if db_ch.lstrip("-").isdigit() else db_ch
     return CHANNEL_ID
 
+def _build_post_link(ch_id: int | str, sent_msg: types.Message) -> str | None:
+    if sent_msg.chat and sent_msg.chat.username:
+        return f"https://t.me/{sent_msg.chat.username}/{sent_msg.message_id}"
+    if isinstance(ch_id, str) and ch_id.startswith("@"):
+        return f"https://t.me/{ch_id.lstrip('@')}/{sent_msg.message_id}"
+    raw_id = str(ch_id)
+    if raw_id.startswith("-100"):
+        return f"https://t.me/c/{raw_id[4:]}/{sent_msg.message_id}"
+    return None
+
 # --- MENU CURHAT (#confess) ---
 @router.callback_query(F.data == "menu_confess")
 async def cb_menu_confess(call: types.CallbackQuery, state: FSMContext):
@@ -33,20 +44,20 @@ async def cb_menu_confess(call: types.CallbackQuery, state: FSMContext):
     if not ch_id:
         return await call.message.edit_text(
             "⚠️ <b>Channel Confession Belum Dikonfigurasi</b>\n\n"
-            "<i>Owner dapat mengatur channel tujuan menggunakan perintah <code>/setch -100xxxx</code> di PC Hans.</i>",
+            "<i>Owner dapat mengatur channel tujuan melalui <b>Panel Kontrol Admin / Owner</b> atau perintah <code>/setch -100xxxx</code>.</i>",
             parse_mode=ParseMode.HTML,
             reply_markup=await main_lobby_kb(call.from_user.id)
         )
 
     await state.set_state(ConfessPMState.waiting_confess_text)
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Batal", callback_data="cancel_confess_pm")]
+        [InlineKeyboardButton(text="❌ Batal & Kembali ke Lobi", callback_data="cancel_confess_pm")]
     ])
     await call.message.edit_text(
         "🕯️ <b>RUANG PENGAKUAN & CURHAT ANONIM (#confess)</b>\n\n"
         f"• <b>Biaya Kirim:</b> <b>{CONFESS_COST_VC} VC</b> (Gratis untuk VIP)\n"
         "• <b>Privasi:</b> Identitasmu 100% dirahasiakan di Channel.\n\n"
-        "<i>Silakan ketik dan kirim isi curhatanmu sekarang:</i>",
+        "<i>Silakan ketik dan kirim isi curhatanmu sekarang (minimal 5 karakter):</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=kb
     )
@@ -77,25 +88,29 @@ async def _publish_confess(message: types.Message, content: str):
         return await message.answer("Channel tujuan belum diatur oleh Owner.", reply_markup=await main_lobby_kb(user.id))
 
     if len(content) < 5:
-        return await message.answer("Isi curhatan terlalu singkat (minimal 5 karakter).", reply_markup=await main_lobby_kb(user.id))
+        return await message.answer(
+            "⚠️ Isi curhatan terlalu singkat (minimal 5 karakter). Silakan ulangi dari menu lobi.",
+            reply_markup=await main_lobby_kb(user.id)
+        )
 
     async with db.pool.acquire() as conn:
         async with conn.transaction():
             row = await conn.fetchrow("SELECT coins, is_vip, vip_until FROM users WHERE user_id = $1 FOR UPDATE", user.id)
-            from datetime import datetime
             is_vip = bool(row and row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
             cost = 0 if is_vip else CONFESS_COST_VC
             coins = row["coins"] if row else 0
 
             if coins < cost:
                 return await message.answer(
-                    f"Saldo VC tidak cukup! Butuh <b>{cost} VC</b> untuk mengirim curhat.",
+                    f"💸 <b>Saldo VC Tidak Cukup</b>\n\n"
+                    f"Butuh <b>{cost} VC</b> untuk mengirim curhat (saldo kamu: <b>{coins} VC</b>).",
                     parse_mode=ParseMode.HTML,
-                    reply_markup=await main_lobby_kb(user.id)
+                    reply_markup=insufficient_vc_kb(coins, cost)
                 )
 
+            new_bal = coins - cost
             if cost > 0:
-                await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", cost, user.id)
+                await conn.execute("UPDATE users SET coins = $1 WHERE user_id = $2", new_bal, user.id)
                 await log_wallet_tx(conn, user.id, -cost, "Kirim Curhat Anonim (#confess)")
 
             post_id = await conn.fetchval("""
@@ -111,15 +126,25 @@ async def _publish_confess(message: types.Message, content: str):
         f"<i>Kirim curhat atau PM rahasia via @{me.username}</i>"
     )
     try:
-        await bot.send_message(ch_id, ch_text, parse_mode=ParseMode.HTML)
+        sent_msg = await bot.send_message(ch_id, ch_text, parse_mode=ParseMode.HTML)
+        post_url = _build_post_link(ch_id, sent_msg)
+        rows = []
+        if post_url:
+            rows.append([InlineKeyboardButton(text="🔗 Lihat Postingan di Channel", url=post_url)])
+        rows.append([InlineKeyboardButton(text="🏠 Kembali ke Lobi Utama", callback_data="back_lobby")])
+
+        cost_note = "Gratis (VIP Pass)" if cost == 0 else f"-{cost} VC (Sisa saldo: <b>{new_bal} VC</b>)"
         await message.answer(
-            f"✅ <b>Curhat #VH{post_id:03d} berhasil diterbitkan secara anonim ke Channel!</b>",
+            f"✅ <b>Curhat #VH{post_id:03d} Berhasil Diterbitkan!</b>\n"
+            f"• <b>Biaya:</b> {cost_note}",
             parse_mode=ParseMode.HTML,
-            reply_markup=await main_lobby_kb(user.id)
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
         )
     except Exception as e:
         await message.answer(
-            f"⚠️ Gagal mengirim ke channel (<code>{html.escape(str(e))}</code>). Pastikan Hans sudah menjadi admin di Channel.",
+            f"⚠️ <b>Gagal mengirim ke channel</b>\n"
+            f"Detail: <code>{html.escape(str(e))}</code>\n"
+            f"<i>Pastikan @HansVolkovVH_bot sudah dijadikan Admin dengan izin 'Post Messages' di Channel tersebut.</i>",
             parse_mode=ParseMode.HTML,
             reply_markup=await main_lobby_kb(user.id)
         )
@@ -132,14 +157,14 @@ async def cb_menu_pm(call: types.CallbackQuery, state: FSMContext):
     if not ch_id:
         return await call.message.edit_text(
             "⚠️ <b>Channel Menfess Belum Dikonfigurasi</b>\n\n"
-            "<i>Owner dapat mengatur channel tujuan menggunakan perintah <code>/setch -100xxxx</code> di PC Hans.</i>",
+            "<i>Owner dapat mengatur channel tujuan melalui <b>Panel Kontrol Admin / Owner</b> atau perintah <code>/setch -100xxxx</code>.</i>",
             parse_mode=ParseMode.HTML,
             reply_markup=await main_lobby_kb(call.from_user.id)
         )
 
     await state.set_state(ConfessPMState.waiting_pm_target)
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Batal", callback_data="cancel_confess_pm")]
+        [InlineKeyboardButton(text="❌ Batal & Kembali ke Lobi", callback_data="cancel_confess_pm")]
     ])
     await call.message.edit_text(
         "💌 <b>KIRIM PRIVATE MESSAGE / MENFESS KE CHANNEL (#pm)</b>\n\n"
@@ -156,11 +181,17 @@ async def fsm_pm_target(message: types.Message, state: FSMContext):
         await state.clear()
         return await message.answer("Pengiriman PM dibatalkan.", reply_markup=await main_lobby_kb(message.from_user.id))
 
-    await state.update_data(target_to=message.text.strip()[:60])
+    target_to = message.text.strip()[:60]
+    await state.update_data(target_to=target_to)
     await state.set_state(ConfessPMState.waiting_pm_text)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Batal & Kembali ke Lobi", callback_data="cancel_confess_pm")]
+    ])
     await message.answer(
-        "✍️ <b>Langkah 2/2:</b> Sekarang ketik <b>isi pesan rahasia</b> yang ingin kamu sampaikan kepadanya:",
-        parse_mode=ParseMode.HTML
+        f"✍️ <b>Langkah 2/2 — Penerima: {html.escape(target_to)}</b>\n\n"
+        "Sekarang ketik <b>isi pesan rahasia</b> yang ingin kamu sampaikan kepadanya:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb
     )
 
 @router.message(ConfessPMState.waiting_pm_text, F.chat.type == "private")
@@ -182,20 +213,21 @@ async def fsm_pm_text(message: types.Message, state: FSMContext):
     async with db.pool.acquire() as conn:
         async with conn.transaction():
             row = await conn.fetchrow("SELECT coins, is_vip, vip_until FROM users WHERE user_id = $1 FOR UPDATE", user.id)
-            from datetime import datetime
             is_vip = bool(row and row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
             cost = 0 if is_vip else PM_COST_VC
             coins = row["coins"] if row else 0
 
             if coins < cost:
                 return await message.answer(
-                    f"Saldo VC tidak cukup! Butuh <b>{cost} VC</b> untuk mengirim PM ke Channel.",
+                    f"💸 <b>Saldo VC Tidak Cukup</b>\n\n"
+                    f"Butuh <b>{cost} VC</b> untuk mengirim PM ke Channel (saldo kamu: <b>{coins} VC</b>).",
                     parse_mode=ParseMode.HTML,
-                    reply_markup=await main_lobby_kb(user.id)
+                    reply_markup=insufficient_vc_kb(coins, cost)
                 )
 
+            new_bal = coins - cost
             if cost > 0:
-                await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", cost, user.id)
+                await conn.execute("UPDATE users SET coins = $1 WHERE user_id = $2", new_bal, user.id)
                 await log_wallet_tx(conn, user.id, -cost, f"Kirim PM Channel untuk {target_to}")
 
             post_id = await conn.fetchval("""
@@ -212,15 +244,38 @@ async def fsm_pm_text(message: types.Message, state: FSMContext):
         f"<i>Kirim curhat atau PM rahasia via @{me.username}</i>"
     )
     try:
-        await bot.send_message(ch_id, ch_text, parse_mode=ParseMode.HTML)
+        sent_msg = await bot.send_message(ch_id, ch_text, parse_mode=ParseMode.HTML)
+        post_url = _build_post_link(ch_id, sent_msg)
+        rows = []
+        if post_url:
+            rows.append([InlineKeyboardButton(text="🔗 Lihat Postingan di Channel", url=post_url)])
+        rows.append([InlineKeyboardButton(text="🏠 Kembali ke Lobi Utama", callback_data="back_lobby")])
+
+        cost_note = "Gratis (VIP Pass)" if cost == 0 else f"-{cost} VC (Sisa saldo: <b>{new_bal} VC</b>)"
         await message.answer(
-            f"✅ <b>Pesan #PM{post_id:03d} untuk {html.escape(target_to)} berhasil dikirim ke Channel!</b>",
+            f"✅ <b>Pesan #PM{post_id:03d} untuk {html.escape(target_to)} Berhasil Dikirim!</b>\n"
+            f"• <b>Biaya:</b> {cost_note}",
             parse_mode=ParseMode.HTML,
-            reply_markup=await main_lobby_kb(user.id)
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
         )
     except Exception as e:
         await message.answer(
-            f"⚠️ Gagal mengirim ke channel (<code>{html.escape(str(e))}</code>).",
+            f"⚠️ <b>Gagal mengirim ke channel</b>\n"
+            f"Detail: <code>{html.escape(str(e))}</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=await main_lobby_kb(user.id)
+        )
+
+@router.callback_query(F.data == "cancel_confess_pm")
+async def cb_cancel_confess_pm(call: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await call.answer("Dibatalkan")
+    await call.message.edit_text(
+        "🏛️ <b>LOBI RESEPSIONIS — THE VELVET HOUR</b>\n\nSilakan pilih layanan yang kamu perlukan:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=await main_lobby_kb(call.from_user.id)
+    )
+  f"⚠️ Gagal mengirim ke channel (<code>{html.escape(str(e))}</code>).",
             parse_mode=ParseMode.HTML,
             reply_markup=await main_lobby_kb(user.id)
         )
