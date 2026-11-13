@@ -10,7 +10,7 @@ from aiogram.enums import ParseMode
 
 import shared.database as db
 from hans_concierge.helpers import (
-    bot, CHANNEL_ID, CONFESS_COST_VC, PM_COST_VC,
+    bot, CHANNEL_ID, CONFESS_COST_VC, PM_COST_VC, react_message,
     get_bar_setting, log_wallet_tx, insufficient_vc_kb, main_lobby_kb
 )
 from hans_concierge.card_gen import generate_channel_post_card, EFFECT_HEART
@@ -168,6 +168,7 @@ async def _publish_confess(message: types.Message, content: str):
             caption=caption,
             parse_mode=ParseMode.HTML,
         )
+        await react_message(message.chat.id, message.message_id, "🕯️")
         post_url = _build_post_link(ch_id, sent_msg)
         rows = []
         if post_url:
@@ -225,6 +226,7 @@ async def fsm_pm_target(message: types.Message, state: FSMContext):
         await state.clear()
         return await message.answer("Pengiriman PM dibatalkan.", reply_markup=await main_lobby_kb(message.from_user.id))
 
+    await react_message(message.chat.id, message.message_id, "✍️")
     target_to = message.text.strip()[:80]
     await state.update_data(target_to=target_to)
     await state.set_state(ConfessPMState.waiting_pm_text)
@@ -306,6 +308,7 @@ async def fsm_pm_text(message: types.Message, state: FSMContext):
             caption=caption,
             parse_mode=ParseMode.HTML,
         )
+        await react_message(message.chat.id, message.message_id, "💌")
         post_url = _build_post_link(ch_id, sent_msg)
         rows = []
         if post_url:
