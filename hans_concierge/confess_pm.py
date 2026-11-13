@@ -1,3 +1,4 @@
+import re
 import html
 from datetime import datetime
 from aiogram import Router, F, types
@@ -15,16 +16,30 @@ from hans_concierge.helpers import (
 
 router = Router()
 
+
 class ConfessPMState(StatesGroup):
     waiting_confess_text = State()
     waiting_pm_target = State()
     waiting_pm_text = State()
+
+
+def _format_user_html(raw_text: str) -> str:
+    """Escape HTML safely while converting [spoiler]...[/spoiler] into <tg-spoiler>...</tg-spoiler>."""
+    escaped = html.escape(raw_text)
+    return re.sub(
+        r"\[spoiler\](.+?)\[/spoiler\]",
+        r"<tg-spoiler>\1</tg-spoiler>",
+        escaped,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
 
 async def _resolve_channel_id() -> int | str | None:
     db_ch = await get_bar_setting("target_channel_id")
     if db_ch:
         return int(db_ch) if db_ch.lstrip("-").isdigit() else db_ch
     return CHANNEL_ID
+
 
 def _build_post_link(ch_id: int | str, sent_msg: types.Message) -> str | None:
     if sent_msg.chat and sent_msg.chat.username:
@@ -35,6 +50,7 @@ def _build_post_link(ch_id: int | str, sent_msg: types.Message) -> str | None:
     if raw_id.startswith("-100"):
         return f"https://t.me/c/{raw_id[4:]}/{sent_msg.message_id}"
     return None
+
 
 # --- MENU CURHAT (#confess) ---
 @router.callback_query(F.data == "menu_confess")
@@ -56,11 +72,13 @@ async def cb_menu_confess(call: types.CallbackQuery, state: FSMContext):
     await call.message.edit_text(
         "🕯️ <b>RUANG PENGAKUAN & CURHAT ANONIM (#confess)</b>\n\n"
         f"• <b>Biaya Kirim:</b> <b>{CONFESS_COST_VC} VC</b> (Gratis untuk VIP)\n"
-        "• <b>Privasi:</b> Identitasmu 100% dirahasiakan di Channel.\n\n"
+        "• <b>Privasi:</b> Identitasmu 100% dirahasiakan di Channel.\n"
+        "• <b>Tips Efek Spoiler:</b> Gunakan <code>[spoiler]teks rahasia[/spoiler]</code> untuk menyembunyikan nama/kalimat tertentu.\n\n"
         "<i>Silakan ketik dan kirim isi curhatanmu sekarang (minimal 5 karakter):</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=kb
     )
+
 
 @router.message(Command("confess"), F.chat.type == "private")
 async def cmd_confess_direct(message: types.Message, state: FSMContext):
@@ -73,6 +91,7 @@ async def cmd_confess_direct(message: types.Message, state: FSMContext):
         )
     await _publish_confess(message, parts[1].strip())
 
+
 @router.message(ConfessPMState.waiting_confess_text, F.chat.type == "private")
 async def fsm_receive_confess(message: types.Message, state: FSMContext):
     if not message.text or message.text.startswith("/cancel"):
@@ -80,6 +99,7 @@ async def fsm_receive_confess(message: types.Message, state: FSMContext):
         return await message.answer("Pengiriman curhat dibatalkan.", reply_markup=await main_lobby_kb(message.from_user.id))
     await state.clear()
     await _publish_confess(message, message.text.strip())
+
 
 async def _publish_confess(message: types.Message, content: str):
     user = message.from_user
@@ -119,9 +139,10 @@ async def _publish_confess(message: types.Message, content: str):
             """, user.id, content)
 
     me = await bot.get_me()
+    formatted_body = _format_user_html(content)
     ch_text = (
         f"🕯️ <b>CONFESSION — #VH{post_id:03d}</b>\n\n"
-        f"“{html.escape(content)}”\n\n"
+        f"“{formatted_body}”\n\n"
         f"— <i>Anonymous Guest</i> | #confess\n"
         f"<i>Kirim curhat atau PM rahasia via @{me.username}</i>"
     )
@@ -149,6 +170,7 @@ async def _publish_confess(message: types.Message, content: str):
             reply_markup=await main_lobby_kb(user.id)
         )
 
+
 # --- MENU PM / MENFESS KE CHANNEL (#pm) ---
 @router.callback_query(F.data == "menu_pm")
 async def cb_menu_pm(call: types.CallbackQuery, state: FSMContext):
@@ -170,10 +192,11 @@ async def cb_menu_pm(call: types.CallbackQuery, state: FSMContext):
         "💌 <b>KIRIM PRIVATE MESSAGE / MENFESS KE CHANNEL (#pm)</b>\n\n"
         f"• <b>Biaya Kirim:</b> <b>{PM_COST_VC} VC</b> (Gratis untuk VIP)\n"
         "• <b>Langkah 1/2:</b> Masukkan <b>Nama / @username / Inisial Penerima</b> pesan ini:\n"
-        "<i>(Contoh: <code>@clara</code> atau <code>Untuk si pemilik mata teduh di sudut bar</code>)</i>",
+        "<i>(Bisa gunakan <code>[spoiler]@username[/spoiler]</code> jika ingin nama penerima disensor)</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=kb
     )
+
 
 @router.message(ConfessPMState.waiting_pm_target, F.chat.type == "private")
 async def fsm_pm_target(message: types.Message, state: FSMContext):
@@ -181,18 +204,20 @@ async def fsm_pm_target(message: types.Message, state: FSMContext):
         await state.clear()
         return await message.answer("Pengiriman PM dibatalkan.", reply_markup=await main_lobby_kb(message.from_user.id))
 
-    target_to = message.text.strip()[:60]
+    target_to = message.text.strip()[:80]
     await state.update_data(target_to=target_to)
     await state.set_state(ConfessPMState.waiting_pm_text)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Batal & Kembali ke Lobi", callback_data="cancel_confess_pm")]
     ])
     await message.answer(
-        f"✍️ <b>Langkah 2/2 — Penerima: {html.escape(target_to)}</b>\n\n"
-        "Sekarang ketik <b>isi pesan rahasia</b> yang ingin kamu sampaikan kepadanya:",
+        f"✍️ <b>Langkah 2/2 — Penerima: {_format_user_html(target_to)}</b>\n\n"
+        "Sekarang ketik <b>isi pesan rahasia</b> yang ingin kamu sampaikan kepadanya "
+        "(mendukung <code>[spoiler]...[/spoiler]</code>):",
         parse_mode=ParseMode.HTML,
         reply_markup=kb
     )
+
 
 @router.message(ConfessPMState.waiting_pm_text, F.chat.type == "private")
 async def fsm_pm_text(message: types.Message, state: FSMContext):
@@ -238,8 +263,8 @@ async def fsm_pm_text(message: types.Message, state: FSMContext):
     me = await bot.get_me()
     ch_text = (
         f"💌 <b>VELVET MENFESS — #PM{post_id:03d}</b>\n\n"
-        f"<b>To:</b> {html.escape(target_to)}\n"
-        f"<b>Message:</b>\n“{html.escape(content)}”\n\n"
+        f"<b>To:</b> {_format_user_html(target_to)}\n"
+        f"<b>Message:</b>\n“{_format_user_html(content)}”\n\n"
         f"— <i>Secret Admirer</i> | #pm\n"
         f"<i>Kirim curhat atau PM rahasia via @{me.username}</i>"
     )
@@ -253,7 +278,7 @@ async def fsm_pm_text(message: types.Message, state: FSMContext):
 
         cost_note = "Gratis (VIP Pass)" if cost == 0 else f"-{cost} VC (Sisa saldo: <b>{new_bal} VC</b>)"
         await message.answer(
-            f"✅ <b>Pesan #PM{post_id:03d} untuk {html.escape(target_to)} Berhasil Dikirim!</b>\n"
+            f"✅ <b>Pesan #PM{post_id:03d} Berhasil Dikirim!</b>\n"
             f"• <b>Biaya:</b> {cost_note}",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
@@ -266,19 +291,6 @@ async def fsm_pm_text(message: types.Message, state: FSMContext):
             reply_markup=await main_lobby_kb(user.id)
         )
 
-@router.callback_query(F.data == "cancel_confess_pm")
-async def cb_cancel_confess_pm(call: types.CallbackQuery, state: FSMContext):
-    await state.clear()
-    await call.answer("Dibatalkan")
-    await call.message.edit_text(
-        "🏛️ <b>LOBI RESEPSIONIS — THE VELVET HOUR</b>\n\nSilakan pilih layanan yang kamu perlukan:",
-        parse_mode=ParseMode.HTML,
-        reply_markup=await main_lobby_kb(call.from_user.id)
-    )
-  f"⚠️ Gagal mengirim ke channel (<code>{html.escape(str(e))}</code>).",
-            parse_mode=ParseMode.HTML,
-            reply_markup=await main_lobby_kb(user.id)
-        )
 
 @router.callback_query(F.data == "cancel_confess_pm")
 async def cb_cancel_confess_pm(call: types.CallbackQuery, state: FSMContext):
@@ -288,5 +300,4 @@ async def cb_cancel_confess_pm(call: types.CallbackQuery, state: FSMContext):
         "🏛️ <b>LOBI RESEPSIONIS — THE VELVET HOUR</b>\n\nSilakan pilih layanan yang kamu perlukan:",
         parse_mode=ParseMode.HTML,
         reply_markup=await main_lobby_kb(call.from_user.id)
-        )
-          
+    )
