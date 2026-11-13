@@ -11,10 +11,13 @@ bot = Bot(token=cfg.TOKEN_HANS)
 
 OWNER_ID = cfg.OWNER_ID
 GROUP_ID = cfg.GROUP_ID
+CHANNEL_ID = getattr(cfg, "CHANNEL_ID", None) or getattr(cfg, "CONFESS_CHANNEL_ID", None)
 REQUIRED_CN_SYMBOL = getattr(cfg, "REQUIRED_CN_SYMBOL", "🥂")
 VIP_COST_24H = getattr(cfg, "VIP_COST_24H", 150)
 DAILY_REWARD_VC = getattr(cfg, "DAILY_REWARD_VC", 20)
 REFERRAL_BONUS_VC = 50
+CONFESS_COST_VC = 5
+PM_COST_VC = 10
 
 DAILY_QUESTS = {
     "daily_checkin": {
@@ -87,6 +90,37 @@ async def ensure_hans_schema():
                 created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()
             );
         """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS bar_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS channel_posts (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                post_type TEXT NOT NULL,
+                target_to TEXT,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()
+            );
+        """)
+
+async def get_bar_setting(key: str, default: str | None = None) -> str | None:
+    async with db.pool.acquire() as conn:
+        val = await conn.fetchval("SELECT value FROM bar_settings WHERE key = $1", key)
+        return val if val is not None else default
+
+async def set_bar_setting(key: str, value: str | None):
+    async with db.pool.acquire() as conn:
+        if value is None:
+            await conn.execute("DELETE FROM bar_settings WHERE key = $1", key)
+        else:
+            await conn.execute("""
+                INSERT INTO bar_settings (key, value) VALUES ($1, $2)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+            """, key, value)
 
 async def log_wallet_tx(conn, user_id: int, amount: int, reason: str):
     await conn.execute(
@@ -131,6 +165,10 @@ async def main_lobby_kb(user_id: int | None = None) -> InlineKeyboardMarkup:
 
     rows = [
         [InlineKeyboardButton(text="🚪 Verifikasi & Masuk ke Bar", callback_data="enter_bar")],
+        [
+            InlineKeyboardButton(text="🕯️ Curhat ke CH (#confess)", callback_data="menu_confess"),
+            InlineKeyboardButton(text="💌 Kirim PM ke CH (#pm)", callback_data="menu_pm"),
+        ],
         [
             InlineKeyboardButton(text="💰 Dompet & Mutasi", callback_data="my_wallet"),
             InlineKeyboardButton(text="📅 Absen Harian", callback_data="claim_daily"),
