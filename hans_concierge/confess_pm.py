@@ -5,7 +5,7 @@ from aiogram import Router, F, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from aiogram.enums import ParseMode
 
 import shared.database as db
@@ -13,6 +13,7 @@ from hans_concierge.helpers import (
     bot, CHANNEL_ID, CONFESS_COST_VC, PM_COST_VC,
     get_bar_setting, log_wallet_tx, insufficient_vc_kb, main_lobby_kb
 )
+from hans_concierge.card_gen import generate_channel_post_card, EFFECT_HEART
 
 router = Router()
 
@@ -24,7 +25,6 @@ class ConfessPMState(StatesGroup):
 
 
 def _format_user_html(raw_text: str) -> str:
-    """Escape HTML safely while converting [spoiler]...[/spoiler] into <tg-spoiler>...</tg-spoiler>."""
     escaped = html.escape(raw_text)
     return re.sub(
         r"\[spoiler\](.+?)\[/spoiler\]",
@@ -52,31 +52,41 @@ def _build_post_link(ch_id: int | str, sent_msg: types.Message) -> str | None:
     return None
 
 
+async def _edit_or_replace(call: types.CallbackQuery, text: str, kb: InlineKeyboardMarkup):
+    if call.message.photo:
+        try:
+            await call.message.delete()
+        except Exception:
+            pass
+        return await call.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    return await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
 # --- MENU CURHAT (#confess) ---
 @router.callback_query(F.data == "menu_confess")
 async def cb_menu_confess(call: types.CallbackQuery, state: FSMContext):
     await call.answer()
     ch_id = await _resolve_channel_id()
     if not ch_id:
-        return await call.message.edit_text(
+        return await _edit_or_replace(
+            call,
             "⚠️ <b>Channel Confession Belum Dikonfigurasi</b>\n\n"
             "<i>Owner dapat mengatur channel tujuan melalui <b>Panel Kontrol Admin / Owner</b> atau perintah <code>/setch -100xxxx</code>.</i>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=await main_lobby_kb(call.from_user.id)
+            await main_lobby_kb(call.from_user.id),
         )
 
     await state.set_state(ConfessPMState.waiting_confess_text)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Batal & Kembali ke Lobi", callback_data="cancel_confess_pm")]
     ])
-    await call.message.edit_text(
+    await _edit_or_replace(
+        call,
         "🕯️ <b>RUANG PENGAKUAN & CURHAT ANONIM (#confess)</b>\n\n"
         f"• <b>Biaya Kirim:</b> <b>{CONFESS_COST_VC} VC</b> (Gratis untuk VIP)\n"
-        "• <b>Privasi:</b> Identitasmu 100% dirahasiakan di Channel.\n"
-        "• <b>Tips Efek Spoiler:</b> Gunakan <code>[spoiler]teks rahasia[/spoiler]</code> untuk menyembunyikan nama/kalimat tertentu.\n\n"
+        "• <b>Tampilan:</b> Dicetak otomatis menjadi <b>Kartu Poster Velvet</b> di Channel.\n"
+        "• <b>Tips Spoiler:</b> Gunakan <code>[spoiler]teks rahasia[/spoiler]</code> untuk menyensor bagian tertentu.\n\n"
         "<i>Silakan ketik dan kirim isi curhatanmu sekarang (minimal 5 karakter):</i>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=kb
+        kb,
     )
 
 
@@ -139,15 +149,25 @@ async def _publish_confess(message: types.Message, content: str):
             """, user.id, content)
 
     me = await bot.get_me()
+    code_tag = f"#VH{post_id:03d}"
+    card_bytes = generate_channel_post_card(post_type="confess", post_number=code_tag, content=content)
+
     formatted_body = _format_user_html(content)
-    ch_text = (
-        f"🕯️ <b>CONFESSION — #VH{post_id:03d}</b>\n\n"
+    caption = (
+        f"🕯️ <b>CONFESSION — {code_tag}</b>\n\n"
         f"“{formatted_body}”\n\n"
-        f"— <i>Anonymous Guest</i> | #confess\n"
-        f"<i>Kirim curhat atau PM rahasia via @{me.username}</i>"
+        f"— <i>Anonymous Guest</i> | #confess | @{me.username}"
     )
+    if len(caption) > 1000:
+        caption = f"🕯️ <b>CONFESSION — {code_tag}</b>\n\n— <i>Anonymous Guest</i> | #confess | @{me.username}"
+
     try:
-        sent_msg = await bot.send_message(ch_id, ch_text, parse_mode=ParseMode.HTML)
+        sent_msg = await bot.send_photo(
+            ch_id,
+            photo=BufferedInputFile(card_bytes, filename=f"confess_{post_id}.png"),
+            caption=caption,
+            parse_mode=ParseMode.HTML,
+        )
         post_url = _build_post_link(ch_id, sent_msg)
         rows = []
         if post_url:
@@ -156,10 +176,11 @@ async def _publish_confess(message: types.Message, content: str):
 
         cost_note = "Gratis (VIP Pass)" if cost == 0 else f"-{cost} VC (Sisa saldo: <b>{new_bal} VC</b>)"
         await message.answer(
-            f"✅ <b>Curhat #VH{post_id:03d} Berhasil Diterbitkan!</b>\n"
+            f"✅ <b>Kartu Curhat {code_tag} Berhasil Diterbitkan!</b>\n"
             f"• <b>Biaya:</b> {cost_note}",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+            message_effect_id=EFFECT_HEART,
         )
     except Exception as e:
         await message.answer(
@@ -177,24 +198,24 @@ async def cb_menu_pm(call: types.CallbackQuery, state: FSMContext):
     await call.answer()
     ch_id = await _resolve_channel_id()
     if not ch_id:
-        return await call.message.edit_text(
+        return await _edit_or_replace(
+            call,
             "⚠️ <b>Channel Menfess Belum Dikonfigurasi</b>\n\n"
             "<i>Owner dapat mengatur channel tujuan melalui <b>Panel Kontrol Admin / Owner</b> atau perintah <code>/setch -100xxxx</code>.</i>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=await main_lobby_kb(call.from_user.id)
+            await main_lobby_kb(call.from_user.id),
         )
 
     await state.set_state(ConfessPMState.waiting_pm_target)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Batal & Kembali ke Lobi", callback_data="cancel_confess_pm")]
     ])
-    await call.message.edit_text(
+    await _edit_or_replace(
+        call,
         "💌 <b>KIRIM PRIVATE MESSAGE / MENFESS KE CHANNEL (#pm)</b>\n\n"
         f"• <b>Biaya Kirim:</b> <b>{PM_COST_VC} VC</b> (Gratis untuk VIP)\n"
         "• <b>Langkah 1/2:</b> Masukkan <b>Nama / @username / Inisial Penerima</b> pesan ini:\n"
         "<i>(Bisa gunakan <code>[spoiler]@username[/spoiler]</code> jika ingin nama penerima disensor)</i>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=kb
+        kb,
     )
 
 
@@ -261,15 +282,30 @@ async def fsm_pm_text(message: types.Message, state: FSMContext):
             """, user.id, target_to, content)
 
     me = await bot.get_me()
-    ch_text = (
-        f"💌 <b>VELVET MENFESS — #PM{post_id:03d}</b>\n\n"
-        f"<b>To:</b> {_format_user_html(target_to)}\n"
-        f"<b>Message:</b>\n“{_format_user_html(content)}”\n\n"
-        f"— <i>Secret Admirer</i> | #pm\n"
-        f"<i>Kirim curhat atau PM rahasia via @{me.username}</i>"
+    code_tag = f"#PM{post_id:03d}"
+    card_bytes = generate_channel_post_card(
+        post_type="pm",
+        post_number=code_tag,
+        content=content,
+        target_to=target_to,
     )
+
+    caption = (
+        f"💌 <b>VELVET MENFESS — {code_tag}</b>\n\n"
+        f"<b>To:</b> {_format_user_html(target_to)}\n"
+        f"<b>Message:</b> “{_format_user_html(content)}”\n\n"
+        f"— <i>Secret Admirer</i> | #pm | @{me.username}"
+    )
+    if len(caption) > 1000:
+        caption = f"💌 <b>VELVET MENFESS — {code_tag}</b>\n<b>To:</b> {_format_user_html(target_to)}\n\n— <i>Secret Admirer</i> | #pm | @{me.username}"
+
     try:
-        sent_msg = await bot.send_message(ch_id, ch_text, parse_mode=ParseMode.HTML)
+        sent_msg = await bot.send_photo(
+            ch_id,
+            photo=BufferedInputFile(card_bytes, filename=f"pm_{post_id}.png"),
+            caption=caption,
+            parse_mode=ParseMode.HTML,
+        )
         post_url = _build_post_link(ch_id, sent_msg)
         rows = []
         if post_url:
@@ -278,10 +314,11 @@ async def fsm_pm_text(message: types.Message, state: FSMContext):
 
         cost_note = "Gratis (VIP Pass)" if cost == 0 else f"-{cost} VC (Sisa saldo: <b>{new_bal} VC</b>)"
         await message.answer(
-            f"✅ <b>Pesan #PM{post_id:03d} Berhasil Dikirim!</b>\n"
+            f"✅ <b>Kartu Menfess {code_tag} Berhasil Dikirim!</b>\n"
             f"• <b>Biaya:</b> {cost_note}",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+            message_effect_id=EFFECT_HEART,
         )
     except Exception as e:
         await message.answer(
@@ -296,8 +333,8 @@ async def fsm_pm_text(message: types.Message, state: FSMContext):
 async def cb_cancel_confess_pm(call: types.CallbackQuery, state: FSMContext):
     await state.clear()
     await call.answer("Dibatalkan")
-    await call.message.edit_text(
+    await _edit_or_replace(
+        call,
         "🏛️ <b>LOBI RESEPSIONIS — THE VELVET HOUR</b>\n\nSilakan pilih layanan yang kamu perlukan:",
-        parse_mode=ParseMode.HTML,
-        reply_markup=await main_lobby_kb(call.from_user.id)
+        await main_lobby_kb(call.from_user.id),
     )
