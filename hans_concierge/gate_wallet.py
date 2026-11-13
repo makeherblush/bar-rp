@@ -11,7 +11,7 @@ from aiogram.enums import ParseMode
 import shared.database as db
 from hans_concierge.helpers import (
     bot, OWNER_ID, GROUP_ID, REQUIRED_CN_SYMBOL, VIP_COST_24H, DAILY_REWARD_VC,
-    REFERRAL_BONUS_VC, DAILY_QUESTS, get_bar_setting,
+    REFERRAL_BONUS_VC, DAILY_QUESTS, get_bar_setting, react_message,
     get_or_create_referral_code, log_wallet_tx, add_quest_progress,
     insufficient_vc_kb, main_lobby_kb, info_categories_kb, back_info_kb
 )
@@ -32,7 +32,6 @@ async def _fetch_user_avatar_bytes(user_id: int) -> bytes | None:
         photos = await bot.get_user_profile_photos(user_id=user_id, limit=1)
         if not photos.photos:
             return None
-        # Ambil ukuran menengah/besar dari foto pertama
         best_photo = photos.photos[0][-1]
         file_info = await bot.get_file(best_photo.file_id)
         buf = io.BytesIO()
@@ -43,7 +42,12 @@ async def _fetch_user_avatar_bytes(user_id: int) -> bytes | None:
         return None
 
 
-async def _send_or_edit_lobby(target: types.Message | types.CallbackQuery, text: str, kb: InlineKeyboardMarkup, effect_id: str | None = None):
+async def _send_or_edit_lobby(
+    target: types.Message | types.CallbackQuery,
+    text: str,
+    kb: InlineKeyboardMarkup,
+    effect_id: str | None = None,
+):
     if isinstance(target, types.CallbackQuery):
         msg = target.message
         if msg.photo or effect_id:
@@ -61,6 +65,8 @@ async def _send_or_edit_lobby(target: types.Message | types.CallbackQuery, text:
 async def cmd_start_hans(message: types.Message, state: FSMContext):
     await state.clear()
     user = message.from_user
+    await react_message(message.chat.id, message.message_id, "🥂")
+
     args = message.text.split(maxsplit=1)
     ref_param = args[1].strip() if len(args) > 1 else ""
 
@@ -213,7 +219,8 @@ async def cb_enter_bar(call: types.CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="🔄 Saya Sudah Pasang Simbol, Cek Ulang", callback_data="enter_bar")],
             [InlineKeyboardButton(text="🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
         ])
-        return await call.message.edit_text(
+        return await _send_or_edit_lobby(
+            call,
             f"🚫 <b>VERIFIKASI ATRIBUT CN BELUM LOLOS</b>\n\n"
             f"• <b>Nama Telegram kamu saat ini:</b> <code>{html.escape(current_name)}</code>\n"
             f"• <b>Simbol wajib bar:</b> <b>{REQUIRED_CN_SYMBOL}</b>\n\n"
@@ -222,8 +229,7 @@ async def cb_enter_bar(call: types.CallbackQuery, state: FSMContext):
             f"2. Tambahkan simbol <b>{REQUIRED_CN_SYMBOL}</b> pada nama depan atau belakangmu "
             f"(contoh: <code>{html.escape(user.first_name)} {REQUIRED_CN_SYMBOL}</code>).\n"
             f"3. Tekan tombol <b>Cek Ulang</b> di bawah ini.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb
+            kb,
         )
 
     door_pw = await get_bar_setting("door_password")
@@ -233,16 +239,16 @@ async def cb_enter_bar(call: types.CallbackQuery, state: FSMContext):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Batal & Kembali ke Lobi", callback_data="back_lobby")]
         ])
-        return await call.message.edit_text(
+        return await _send_or_edit_lobby(
+            call,
             "🔐 <b>KATA SANDI PINTU LOUNGE DIPERLUKAN</b>\n\n"
             f"✅ Atribut CN (<code>{html.escape(current_name)}</code>) terverifikasi.\n"
             "<i>Namun malam ini pintu ruang lounge dikunci dengan kata sandi khusus. Silakan ketik kata sandi masuk sekarang:</i>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb
+            kb,
         )
 
     await call.answer("Verifikasi CN berhasil!")
-    await _grant_bar_entry(user, call.message, edit=True)
+    await _grant_bar_entry(user, call.message, edit=(not call.message.photo))
 
 
 @router.message(GatePasswordState.waiting_password, F.chat.type == "private")
@@ -254,9 +260,11 @@ async def fsm_check_door_password(message: types.Message, state: FSMContext):
 
     door_pw = await get_bar_setting("door_password")
     if not door_pw or message.text.strip() == door_pw:
+        await react_message(message.chat.id, message.message_id, "🥂")
         await state.clear()
         return await _grant_bar_entry(user, message, edit=False)
 
+    await react_message(message.chat.id, message.message_id, "👎")
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Batal & Kembali ke Lobi", callback_data="back_lobby")]
     ])
@@ -338,7 +346,7 @@ async def cb_my_wallet(call: types.CallbackQuery):
     )
 
 
-# --- ABSEN HARIAN (/daily & TOMBOL + EFEK API) ---
+# --- ABSEN HARIAN (/daily & TOMBOL + REACTION + EFEK API) ---
 async def _process_daily_claim(user_id: int, full_name: str) -> tuple[str, bool]:
     today = datetime.utcnow().date()
     async with db.pool.acquire() as conn:
@@ -369,6 +377,7 @@ async def _process_daily_claim(user_id: int, full_name: str) -> tuple[str, bool]
 @router.message(Command("daily"), F.chat.type == "private")
 async def cmd_daily_pc(message: types.Message):
     res, claimed_now = await _process_daily_claim(message.from_user.id, message.from_user.first_name)
+    await react_message(message.chat.id, message.message_id, "🔥" if claimed_now else "⏳")
     await message.answer(
         res,
         parse_mode=ParseMode.HTML,
