@@ -2,22 +2,28 @@ import html
 from datetime import datetime, timedelta
 from aiogram import Router, F, types
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ParseMode
 
 import shared.database as db
 from hans_concierge.helpers import (
     bot, OWNER_ID, GROUP_ID, REQUIRED_CN_SYMBOL, VIP_COST_24H, DAILY_REWARD_VC,
-    REFERRAL_BONUS_VC, DAILY_QUESTS, is_staff_or_owner,
+    REFERRAL_BONUS_VC, DAILY_QUESTS, is_staff_or_owner, get_bar_setting,
     get_or_create_referral_code, log_wallet_tx, add_quest_progress,
     main_lobby_kb, info_categories_kb, back_info_kb
 )
 
 router = Router()
 
+class GatePasswordState(StatesGroup):
+    waiting_password = State()
+
 # --- GERBANG UTAMA (/start + KODE REFERRAL) ---
 @router.message(CommandStart(), F.chat.type == "private")
-async def cmd_start_hans(message: types.Message):
+async def cmd_start_hans(message: types.Message, state: FSMContext):
+    await state.clear()
     user = message.from_user
     args = message.text.split(maxsplit=1)
     ref_param = args[1].strip() if len(args) > 1 else ""
@@ -48,12 +54,13 @@ async def cmd_start_hans(message: types.Message):
         "🚪 <i>Lampu gantung kristal menyala temaram di balik tirai beludru merah...</i>\n\n"
         f"<b>\"Selamat malam, {html.escape(user.first_name)}. Saya Hans, Kepala Concierge di <i>The Velvet Hour</i>.\"</b>\n\n"
         f"Sebelum melangkah masuk ke ruang lounge utama, pastikan nama tampilan Telegram kamu menyertakan simbol resmi bar: <b>{REQUIRED_CN_SYMBOL}</b>.\n\n"
-        "<i>Gunakan panel resepsionis di bawah ini untuk masuk ke ruangan, memeriksa mutasi dompet, menyelesaikan misi harian, atau mengundang teman:</i>"
+        "<i>Gunakan panel resepsionis di bawah ini untuk masuk ke ruangan, mengirim curhat/PM ke channel, memeriksa mutasi dompet, atau mengundang teman:</i>"
     )
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=await main_lobby_kb(user.id))
 
 @router.callback_query(F.data == "back_lobby")
-async def cb_back_lobby(call: types.CallbackQuery):
+async def cb_back_lobby(call: types.CallbackQuery, state: FSMContext):
+    await state.clear()
     await call.answer()
     await call.message.edit_text(
         f"🏛️ <b>LOBI RESEPSIONIS — THE VELVET HOUR</b>\n\n"
@@ -72,16 +79,25 @@ async def cb_open_admin_panel(call: types.CallbackQuery):
 
     await call.answer()
     is_owner = (user_id == OWNER_ID)
+    cur_pw = await get_bar_setting("door_password")
+    pw_status = f"<code>{html.escape(cur_pw)}</code> (Aktif)" if cur_pw else "<i>Tidak aktif (Bebas masuk dengan CN)</i>"
+    cur_ch = await get_bar_setting("target_channel_id") or "Default Config"
 
     if is_owner:
         text = (
             "👑 <b>PANEL KONTROL UTAMA — OWNER THE VELVET HOUR</b>\n\n"
-            "<i>Gunakan perintah berikut di chat pribadi Hans untuk mengelola bar:</i>\n\n"
-            "• <code>/addshop @username Nama Toko</code> — Daftarkan lapak partner baru\n"
-            "• <code>/delshop ID_Toko</code> — Hapus lapak partner\n"
+            f"🔐 <b>Password Pintu Masuk:</b> {pw_status}\n"
+            f"📢 <b>Channel Confess/PM:</b> <code>{html.escape(str(cur_ch))}</code>\n\n"
+            "<b>Perintah Eksklusif Owner:</b>\n"
+            "• <code>/setpw katasandi</code> — Pasang / ganti password pintu masuk bar\n"
+            "• <code>/delpw</code> — Hapus / matikan password pintu masuk\n"
+            "• <code>/setch -100xxxx</code> — Atur ID Channel untuk #confess & #pm\n"
             "• <code>/givevc @username jumlah</code> — Suntik saldo VC ke tamu\n"
             "• <code>/addadmin @username</code> — Angkat Staf Admin baru\n"
-            "• <code>/deladmin @username</code> — Cabut akses Staf Admin"
+            "• <code>/deladmin @username</code> — Cabut akses Staf Admin\n\n"
+            "<b>Perintah Manajemen Lapak (Owner & Admin):</b>\n"
+            "• <code>/addshop @username Nama Toko</code> — Daftarkan lapak partner\n"
+            "• <code>/delshop ID_Toko</code> — Hapus lapak partner"
         )
     else:
         text = (
@@ -89,7 +105,7 @@ async def cb_open_admin_panel(call: types.CallbackQuery):
             "<i>Gunakan perintah berikut di chat pribadi Hans untuk mengelola lapak:</i>\n\n"
             "• <code>/addshop @username Nama Toko</code> — Daftarkan lapak partner baru\n"
             "• <code>/delshop ID_Toko</code> — Hapus lapak partner\n\n"
-            "<i>(Catatan: Pengangkatan admin dan penyuntikan koin VC /givevc merupakan hak eksklusif Owner).</i>"
+            "<i>(Catatan: Pengaturan password pintu, channel, admin, dan /givevc merupakan hak eksklusif Owner).</i>"
         )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -97,19 +113,9 @@ async def cb_open_admin_panel(call: types.CallbackQuery):
     ])
     await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
 
-# --- VERIFIKASI MASUK BAR & PENCAIRAN BONUS REFERRAL ---
-@router.callback_query(F.data == "enter_bar")
-async def cb_enter_bar(call: types.CallbackQuery):
-    user = call.from_user
-    if REQUIRED_CN_SYMBOL not in (user.full_name or ""):
-        return await call.answer(
-            f"Atribut CN ({REQUIRED_CN_SYMBOL}) belum terpasang pada nama tampilan Telegram kamu!",
-            show_alert=True
-        )
-
-    await call.answer("Verifikasi CN berhasil!")
+# --- VERIFIKASI MASUK BAR (+ CEK PASSWORD PINTU JIKA AKTIF) ---
+async def _grant_bar_entry(user: types.User, target_msg: types.Message, edit: bool = True):
     ref_bonus_note = ""
-
     async with db.pool.acquire() as conn:
         async with conn.transaction():
             row = await conn.fetchrow(
@@ -140,19 +146,65 @@ async def cb_enter_bar(call: types.CallbackQuery):
             [InlineKeyboardButton(text="🥂 Melangkah Masuk ke Ruang Utama", url=invite.invite_link)],
             [InlineKeyboardButton(text="⬅️ Kembali ke Lobi", callback_data="back_lobby")]
         ])
-        await call.message.edit_text(
+        out = (
             f"✅ <b>VERIFIKASI ATRIBUT ({REQUIRED_CN_SYMBOL}) BERHASIL</b>\n"
             f"{ref_bonus_note}\n"
-            "<i>Hans membukakan pintu kayu mahoni dan mempersilakanmu masuk. Tautan pintu sekali pakai di bawah ini berlaku selama 10 menit:</i>",
+            "<i>Hans membukakan pintu kayu mahoni dan mempersilakanmu masuk. Tautan pintu sekali pakai di bawah ini berlaku selama 10 menit:</i>"
+        )
+        if edit:
+            await target_msg.edit_text(out, parse_mode=ParseMode.HTML, reply_markup=kb)
+        else:
+            await target_msg.answer(out, parse_mode=ParseMode.HTML, reply_markup=kb)
+    except Exception as e:
+        err_out = f"⚠️ Gagal membuat tautan masuk otomatis (<code>{html.escape(str(e))}</code>). Hubungi Owner."
+        if edit:
+            await target_msg.edit_text(err_out, parse_mode=ParseMode.HTML, reply_markup=await main_lobby_kb(user.id))
+        else:
+            await target_msg.answer(err_out, parse_mode=ParseMode.HTML, reply_markup=await main_lobby_kb(user.id))
+
+@router.callback_query(F.data == "enter_bar")
+async def cb_enter_bar(call: types.CallbackQuery, state: FSMContext):
+    user = call.from_user
+    if REQUIRED_CN_SYMBOL not in (user.full_name or ""):
+        return await call.answer(
+            f"Atribut CN ({REQUIRED_CN_SYMBOL}) belum terpasang pada nama tampilan Telegram kamu!",
+            show_alert=True
+        )
+
+    door_pw = await get_bar_setting("door_password")
+    if door_pw and user.id != OWNER_ID:
+        await call.answer()
+        await state.set_state(GatePasswordState.waiting_password)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Batal", callback_data="back_lobby")]
+        ])
+        return await call.message.edit_text(
+            "🔐 <b>KATA SANDI PINTU LOUNGE DIPERLUKAN</b>\n\n"
+            "<i>Hans menatapmu dengan sopan di depan pintu beludru merah.</i>\n"
+            "<b>\"Malam ini ruang lounge menggunakan kata sandi khusus. Silakan bisikkan (ketik) kata sandinya sekarang:\"</b>",
             parse_mode=ParseMode.HTML,
             reply_markup=kb
         )
-    except Exception as e:
-        await call.message.edit_text(
-            f"⚠️ Gagal membuat tautan masuk otomatis (<code>{html.escape(str(e))}</code>). Hubungi Owner.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=await main_lobby_kb(user.id)
-        )
+
+    await call.answer("Verifikasi CN berhasil!")
+    await _grant_bar_entry(user, call.message, edit=True)
+
+@router.message(GatePasswordState.waiting_password, F.chat.type == "private")
+async def fsm_check_door_password(message: types.Message, state: FSMContext):
+    user = message.from_user
+    if not message.text or message.text.startswith("/cancel"):
+        await state.clear()
+        return await message.answer("Dibatalkan.", reply_markup=await main_lobby_kb(user.id))
+
+    door_pw = await get_bar_setting("door_password")
+    if not door_pw or message.text.strip() == door_pw:
+        await state.clear()
+        return await _grant_bar_entry(user, message, edit=False)
+
+    await message.answer(
+        "❌ <b>Kata sandi salah!</b>\n<i>Silakan ketik ulang kata sandi pintu lounge yang benar, atau ketik /cancel untuk kembali ke lobi:</i>",
+        parse_mode=ParseMode.HTML
+    )
 
 # --- DOMPET & RIWAYAT MUTASI TRANSAKSI ---
 @router.callback_query(F.data == "my_wallet")
@@ -203,6 +255,155 @@ async def _process_daily_claim(user_id: int, full_name: str) -> str:
             row = await conn.fetchrow("SELECT last_daily FROM users WHERE user_id = $1 FOR UPDATE", user_id)
             if row and row["last_daily"] == today:
                 return "⏳ <i>Kamu sudah mengambil jatah uang saku harian hari ini. Kembali lagi besok!</i>"
+            await conn.execute(
+                "UPDATE users SET coins = coins + $1, last_daily = $2 WHERE user_id = $3",
+                DAILY_REWARD_VC, today, user_id
+            )
+            await log_wallet_tx(conn, user_id, DAILY_REWARD_VC, "Absen harian (/daily)")
+    await add_quest_progress(user_id, "daily_checkin", 1)
+    return (
+        f"📅 <b>ABSEN HARIAN BERHASIL!</b>\n\n"
+        f"<i>Hans menyerahkan amplop beludru berisi <b>+{DAILY_REWARD_VC} Velvet Coins</b> kepada <b>{html.escape(full_name)}</b>.</i>"
+    )
+
+@router.message(Command("daily"), F.chat.type == "private")
+async def cmd_daily_pc(message: types.Message):
+    res = await _process_daily_claim(message.from_user.id, message.from_user.first_name)
+    await message.answer(res, parse_mode=ParseMode.HTML, reply_markup=await main_lobby_kb(message.from_user.id))
+
+@router.callback_query(F.data == "claim_daily")
+async def cb_claim_daily(call: types.CallbackQuery):
+    await call.answer()
+    res = await _process_daily_claim(call.from_user.id, call.from_user.first_name)
+    await call.message.edit_text(res, parse_mode=ParseMode.HTML, reply_markup=await main_lobby_kb(call.from_user.id))
+
+# --- MISI HARIAN ---
+@router.callback_query(F.data == "daily_quests")
+async def cb_daily_quests(call: types.CallbackQuery):
+    await call.answer()
+    user_id = call.from_user.id
+    today = datetime.utcnow().date()
+
+    async with db.pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT quest_key, progress, claimed FROM daily_quests WHERE user_id = $1 AND quest_date = $2",
+            user_id, today
+        )
+    prog_map = {r["quest_key"]: r for r in rows}
+
+    lines = []
+    buttons = []
+    for q_key, meta in DAILY_QUESTS.items():
+        r = prog_map.get(q_key)
+        cur = r["progress"] if r else 0
+        claimed = r["claimed"] if r else False
+        target = meta["target"]
+
+        if claimed:
+            status = "✅ <i>Sudah diklaim</i>"
+        elif cur >= target:
+            status = f"🎁 <b>Siap Klaim (+{meta['reward']} VC)!</b>"
+            buttons.append([InlineKeyboardButton(text=f"🎁 Klaim {meta['title']} (+{meta['reward']} VC)", callback_data=f"claimq_{q_key}")])
+        else:
+            status = f"⏳ Progres: <b>{cur}/{target}</b> (Hadiah: +{meta['reward']} VC)"
+
+        lines.append(f"• <b>{meta['title']}</b>\n  {meta['desc']}\n  {status}")
+
+    buttons.append([InlineKeyboardButton(text="🏠 Kembali ke Lobi Utama", callback_data="back_lobby")])
+    await call.message.edit_text(
+        "🎯 <b>MISI HARIAN — THE VELVET HOUR</b>\n"
+        "<i>Selesaikan aktivitas ringan setiap hari untuk mendapatkan bonus Velvet Coins:</i>\n\n"
+        + "\n\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+
+@router.callback_query(F.data.startswith("claimq_"))
+async def cb_claim_quest(call: types.CallbackQuery):
+    q_key = call.data.replace("claimq_", "")
+    meta = DAILY_QUESTS.get(q_key)
+    if not meta:
+        return await call.answer("Misi tidak valid.", show_alert=True)
+
+    user_id = call.from_user.id
+    today = datetime.utcnow().date()
+    reward = meta["reward"]
+
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT progress, claimed FROM daily_quests WHERE user_id = $1 AND quest_date = $2 AND quest_key = $3 FOR UPDATE",
+                user_id, today, q_key
+            )
+            if not row or row["progress"] < meta["target"]:
+                return await call.answer("Progres misi belum selesai!", show_alert=True)
+            if row["claimed"]:
+                return await call.answer("Hadiah misi ini sudah diklaim!", show_alert=True)
+
+            await conn.execute(
+                "UPDATE daily_quests SET claimed = TRUE WHERE user_id = $1 AND quest_date = $2 AND quest_key = $3",
+                user_id, today, q_key
+            )
+            await conn.execute("UPDATE users SET coins = coins + $1 WHERE user_id = $2", reward, user_id)
+            await log_wallet_tx(conn, user_id, reward, f"Hadiah Misi: {meta['title']}")
+
+    await call.answer(f"Berhasil klaim +{reward} VC!", show_alert=True)
+    await cb_daily_quests(call)
+
+# --- KODE REFERRAL / UNDANG TEMAN ---
+@router.callback_query(F.data == "my_referral")
+async def cb_my_referral(call: types.CallbackQuery):
+    await call.answer()
+    user_id = call.from_user.id
+    code = await get_or_create_referral_code(user_id)
+    me = await bot.get_me()
+    ref_link = f"https://t.me/{me.username}?start=ref_{code}"
+
+    async with db.pool.acquire() as conn:
+        total_invited = await conn.fetchval("SELECT referral_count FROM users WHERE user_id = $1", user_id) or 0
+
+    text = (
+        "🎟️ <b>PROGRAM UNDANGAN TAMU (REFERRAL)</b>\n\n"
+        f"Bagikan tautan undangan eksklusif milikmu kepada teman RP. "
+        f"Saat temanmu mendaftar lewat tautan ini dan lolos verifikasi pintu masuk ({REQUIRED_CN_SYMBOL}), "
+        f"kalian berdua langsung memperoleh <b>+{REFERRAL_BONUS_VC} Velvet Coins</b>!\n\n"
+        f"• <b>Kode Undanganmu:</b> <code>{code}</code>\n"
+        f"• <b>Total Teman Berhasil Diundang:</b> {total_invited} orang\n"
+        f"• <b>Tautan Undanganmu:</b>\n<code>{ref_link}</code>"
+    )
+    await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=await main_lobby_kb(user_id))
+
+# --- BELI VIP PASS (24 JAM) ---
+@router.callback_query(F.data == "buy_vip")
+async def cb_buy_vip(call: types.CallbackQuery):
+    user_id = call.from_user.id
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow("SELECT coins, is_vip, vip_until FROM users WHERE user_id = $1 FOR UPDATE", user_id)
+            coins = row["coins"] if row else 0
+            if coins < VIP_COST_24H:
+                return await call.answer(f"Saldo tidak cukup! Butuh {VIP_COST_24H} VC.", show_alert=True)
+
+            now = datetime.utcnow()
+            base_time = row["vip_until"] if (row and row["is_vip"] and row["vip_until"] and row["vip_until"] > now) else now
+            new_until = base_time + timedelta(hours=24)
+
+            await conn.execute(
+                "UPDATE users SET coins = coins - $1, is_vip = TRUE, vip_until = $2 WHERE user_id = $3",
+                VIP_COST_24H, new_until, user_id
+            )
+            await log_wallet_tx(conn, user_id, -VIP_COST_24H, "Aktivasi VIP Reserve Pass (24 Jam)")
+
+    await call.answer("VIP Pass aktif selama 24 jam!", show_alert=True)
+    await call.message.edit_text(
+        f"🍾 <b>VIP RESERVE PASS AKTIF!</b>\n\n"
+        f"• <b>Berlaku hingga:</b> {new_until.strftime('%d %b %Y %H:%M UTC')}\n"
+        f"• <b>Keuntungan VIP:</b>\n"
+        f"  1. Gratis request lagu di grup (<code>/reqsong</code>)\n"
+        f"  2. Gratis menu makanan & minuman eksklusif VIP (<code>/order</code> & <code>/eat</code>)\n"
+        f"  3. Gratis kirim Curhat (#confess) & PM (#pm) ke Channel\n"
+        f"  4. Reservasi meja eksklusif (<code>/booth Nama Booth</code>)\n"
+        f"  5. Batas anti-idle 2x lebih lama (/i>"
             await conn.execute(
                 "UPDATE users SET coins = coins + $1, last_daily = $2 WHERE user_id = $3",
                 DAILY_REWARD_VC, today, user_id
