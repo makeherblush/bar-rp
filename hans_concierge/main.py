@@ -41,7 +41,11 @@ class AdminActionState(StatesGroup):
 async def _build_admin_dashboard(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     is_owner = (user_id == OWNER_ID)
     cur_pw = await get_bar_setting("door_password")
-    pw_status = f"<code>{html.escape(cur_pw)}</code> (🟢 Aktif)" if cur_pw else "<i>Nonaktif (Bebas masuk dengan CN)</i>"
+    pw_status = (
+        f"<tg-spoiler><code>{html.escape(cur_pw)}</code></tg-spoiler> (🟢 Aktif — sentuh untuk intip)"
+        if cur_pw
+        else "<i>Nonaktif (Bebas masuk dengan CN)</i>"
+    )
     cur_ch = await get_bar_setting("target_channel_id") or "<i>Belum diatur</i>"
 
     async with db.pool.acquire() as conn:
@@ -143,8 +147,8 @@ async def cb_adm_list_overview(call: types.CallbackQuery):
     ])
     await call.message.edit_text(
         "📋 <b>DAFTAR LAPAK PARTNER & STAF ADMIN</b>\n\n"
-        "<b>🏪 Lapak Partner Aktif:</b>\n" + "\n".join(shop_lines) + "\n\n"
-        "<b>👮 Staf Admin Aktif:</b>\n" + "\n".join(admin_lines),
+        f"<b>🏪 Lapak Partner Aktif:</b>\n<blockquote expandable>{chr(10).join(shop_lines)}</blockquote>\n\n"
+        f"<b>👮 Staf Admin Aktif:</b>\n<blockquote expandable>{chr(10).join(admin_lines)}</blockquote>",
         parse_mode=ParseMode.HTML,
         reply_markup=kb
     )
@@ -180,7 +184,7 @@ async def fsm_adm_setpw(message: types.Message, state: FSMContext):
     await state.clear()
     text, kb = await _build_admin_dashboard(message.from_user.id)
     await message.answer(
-        f"✅ <b>Password pintu bar berhasil diatur ke:</b> <code>{html.escape(new_pw)}</code>\n\n" + text,
+        f"✅ <b>Password pintu bar diperbarui:</b> <tg-spoiler><code>{html.escape(new_pw)}</code></tg-spoiler>\n\n" + text,
         parse_mode=ParseMode.HTML,
         reply_markup=kb
     )
@@ -204,7 +208,7 @@ async def cmd_setpw(message: types.Message):
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
         cur_pw = await get_bar_setting("door_password")
-        status = f"<code>{html.escape(cur_pw)}</code>" if cur_pw else "<i>Belum dipasang</i>"
+        status = f"<tg-spoiler><code>{html.escape(cur_pw)}</code></tg-spoiler>" if cur_pw else "<i>Belum dipasang</i>"
         return await message.answer(
             f"🔐 <b>Password Pintu Saat Ini:</b> {status}\n\n"
             f"Format ganti password: <code>/setpw katasandibaru</code>\n"
@@ -216,7 +220,7 @@ async def cmd_setpw(message: types.Message):
     await set_bar_setting("door_password", new_pw)
     await message.answer(
         f"✅ <b>Password pintu masuk bar berhasil diperbarui!</b>\n"
-        f"Kata sandi baru: <code>{html.escape(new_pw)}</code>",
+        f"Kata sandi baru (sentuh untuk melihat): <tg-spoiler><code>{html.escape(new_pw)}</code></tg-spoiler>",
         parse_mode=ParseMode.HTML
     )
 
