@@ -2,7 +2,7 @@ import random
 import string
 from datetime import datetime
 from aiogram import Bot
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReactionTypeEmoji
 
 import shared.database as db
 import shared.config as cfg
@@ -39,6 +39,19 @@ DAILY_QUESTS = {
         "reward": 20,
     },
 }
+
+
+async def react_message(chat_id: int, message_id: int, emoji: str = "🥂"):
+    """Memberikan auto-reaction emoji resmi Telegram pada pesan user."""
+    try:
+        await bot.set_message_reaction(
+            chat_id=chat_id,
+            message_id=message_id,
+            reaction=[ReactionTypeEmoji(emoji=emoji)],
+        )
+    except Exception:
+        pass
+
 
 async def ensure_hans_schema():
     async with db.pool.acquire() as conn:
@@ -107,10 +120,12 @@ async def ensure_hans_schema():
             );
         """)
 
+
 async def get_bar_setting(key: str, default: str | None = None) -> str | None:
     async with db.pool.acquire() as conn:
         val = await conn.fetchval("SELECT value FROM bar_settings WHERE key = $1", key)
         return val if val is not None else default
+
 
 async def set_bar_setting(key: str, value: str | None):
     async with db.pool.acquire() as conn:
@@ -122,8 +137,8 @@ async def set_bar_setting(key: str, value: str | None):
                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
             """, key, value)
 
+
 async def resolve_target_user(conn, identifier: str):
-    """Find a user by @username or numeric user_id."""
     clean = identifier.strip().lstrip("@")
     if clean.isdigit():
         return await conn.fetchrow(
@@ -135,11 +150,13 @@ async def resolve_target_user(conn, identifier: str):
         clean.lower()
     )
 
+
 async def log_wallet_tx(conn, user_id: int, amount: int, reason: str):
     await conn.execute(
         "INSERT INTO wallet_transactions (user_id, amount, reason, created_at) VALUES ($1, $2, $3, NOW())",
         user_id, amount, reason
     )
+
 
 async def add_quest_progress(user_id: int, quest_key: str, inc: int = 1):
     meta = DAILY_QUESTS.get(quest_key)
@@ -154,6 +171,7 @@ async def add_quest_progress(user_id: int, quest_key: str, inc: int = 1):
             SET progress = LEAST(daily_quests.progress + $4, $5);
         """, user_id, today, quest_key, inc, meta["target"])
 
+
 async def get_or_create_referral_code(user_id: int) -> str:
     async with db.pool.acquire() as conn:
         code = await conn.fetchval("SELECT referral_code FROM users WHERE user_id = $1", user_id)
@@ -166,12 +184,14 @@ async def get_or_create_referral_code(user_id: int) -> str:
                 await conn.execute("UPDATE users SET referral_code = $1 WHERE user_id = $2", new_code, user_id)
                 return new_code
 
+
 async def is_staff_or_owner(user_id: int) -> bool:
     if user_id == OWNER_ID:
         return True
     async with db.pool.acquire() as conn:
         row = await conn.fetchrow("SELECT is_admin FROM users WHERE user_id = $1", user_id)
         return bool(row and row["is_admin"])
+
 
 def insufficient_vc_kb(current_vc: int, needed_vc: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -181,6 +201,7 @@ def insufficient_vc_kb(current_vc: int, needed_vc: int) -> InlineKeyboardMarkup:
         ],
         [InlineKeyboardButton(text="🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
     ])
+
 
 async def main_lobby_kb(user_id: int | None = None) -> InlineKeyboardMarkup:
     is_admin_or_owner = await is_staff_or_owner(user_id) if user_id else False
@@ -192,7 +213,7 @@ async def main_lobby_kb(user_id: int | None = None) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="💌 Kirim PM ke CH (#pm)", callback_data="menu_pm"),
         ],
         [
-            InlineKeyboardButton(text="💰 Dompet & Mutasi", callback_data="my_wallet"),
+            InlineKeyboardButton(text="💳 Kartu Member & Mutasi", callback_data="my_wallet"),
             InlineKeyboardButton(text="📅 Absen Harian", callback_data="claim_daily"),
         ],
         [
@@ -214,6 +235,7 @@ async def main_lobby_kb(user_id: int | None = None) -> InlineKeyboardMarkup:
 
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
+
 def info_categories_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🥂 Command Bar, Menu VIP & Mini-Game", callback_data="info_cmd_bar")],
@@ -222,6 +244,7 @@ def info_categories_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🎯 Ekonomi VC, Misi & Referral", callback_data="info_economy")],
         [InlineKeyboardButton(text="🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
     ])
+
 
 def back_info_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
