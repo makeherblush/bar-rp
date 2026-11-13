@@ -122,6 +122,19 @@ async def set_bar_setting(key: str, value: str | None):
                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
             """, key, value)
 
+async def resolve_target_user(conn, identifier: str):
+    """Find a user by @username or numeric user_id."""
+    clean = identifier.strip().lstrip("@")
+    if clean.isdigit():
+        return await conn.fetchrow(
+            "SELECT user_id, username, full_name, coins, is_admin FROM users WHERE user_id = $1",
+            int(clean)
+        )
+    return await conn.fetchrow(
+        "SELECT user_id, username, full_name, coins, is_admin FROM users WHERE LOWER(username) = $1",
+        clean.lower()
+    )
+
 async def log_wallet_tx(conn, user_id: int, amount: int, reason: str):
     await conn.execute(
         "INSERT INTO wallet_transactions (user_id, amount, reason, created_at) VALUES ($1, $2, $3, NOW())",
@@ -159,6 +172,15 @@ async def is_staff_or_owner(user_id: int) -> bool:
     async with db.pool.acquire() as conn:
         row = await conn.fetchrow("SELECT is_admin FROM users WHERE user_id = $1", user_id)
         return bool(row and row["is_admin"])
+
+def insufficient_vc_kb(current_vc: int, needed_vc: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📅 Klaim Absen Harian (+20 VC)", callback_data="claim_daily"),
+            InlineKeyboardButton(text="🎯 Cek Misi Harian", callback_data="daily_quests"),
+        ],
+        [InlineKeyboardButton(text="🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
+    ])
 
 async def main_lobby_kb(user_id: int | None = None) -> InlineKeyboardMarkup:
     is_admin_or_owner = await is_staff_or_owner(user_id) if user_id else False
