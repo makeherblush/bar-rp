@@ -53,6 +53,26 @@ async def react_message(chat_id: int, message_id: int, emoji: str = "🥂"):
         pass
 
 
+def styled_btn(
+    text: str,
+    callback_data: str | None = None,
+    url: str | None = None,
+    style: str | None = None,
+    icon_emoji_id: str | None = None,
+) -> InlineKeyboardButton:
+    """Membuat InlineKeyboardButton dengan dukungan warna (primary/success/danger) & custom emoji ID."""
+    data = {"text": text}
+    if callback_data:
+        data["callback_data"] = callback_data
+    if url:
+        data["url"] = url
+    if style:
+        data["style"] = style
+    if icon_emoji_id:
+        data["icon_custom_emoji_id"] = icon_emoji_id
+    return InlineKeyboardButton.model_construct(**data)
+
+
 async def ensure_hans_schema():
     async with db.pool.acquire() as conn:
         await conn.execute("""
@@ -193,61 +213,76 @@ async def is_staff_or_owner(user_id: int) -> bool:
         return bool(row and row["is_admin"])
 
 
+async def _btn_label_and_icon(setting_key: str, default_emoji: str, label: str) -> tuple[str, str | None]:
+    custom_id = await get_bar_setting(setting_key)
+    if custom_id:
+        return label, custom_id
+    return f"{default_emoji} {label}", None
+
+
 def insufficient_vc_kb(current_vc: int, needed_vc: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📅 Klaim Absen Harian (+20 VC)", callback_data="claim_daily"),
-            InlineKeyboardButton(text="🎯 Cek Misi Harian", callback_data="daily_quests"),
+            styled_btn("📅 Klaim Absen Harian (+20 VC)", callback_data="claim_daily", style="success"),
+            styled_btn("🎯 Cek Misi Harian", callback_data="daily_quests"),
         ],
-        [InlineKeyboardButton(text="🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
+        [styled_btn("🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
     ])
 
 
 async def main_lobby_kb(user_id: int | None = None) -> InlineKeyboardMarkup:
     is_admin_or_owner = await is_staff_or_owner(user_id) if user_id else False
 
+    lbl_enter, ico_enter = await _btn_label_and_icon("ico_enter", "🚪", "Verifikasi & Masuk ke Bar")
+    lbl_confess, ico_confess = await _btn_label_and_icon("ico_confess", "🕯️", "Curhat ke CH (#confess)")
+    lbl_pm, ico_pm = await _btn_label_and_icon("ico_pm", "💌", "Kirim PM ke CH (#pm)")
+    lbl_wallet, ico_wallet = await _btn_label_and_icon("ico_wallet", "💳", "Kartu Member & Mutasi")
+    lbl_daily, ico_daily = await _btn_label_and_icon("ico_daily", "📅", "Absen Harian")
+    lbl_vip, ico_vip = await _btn_label_and_icon("ico_vip", "🍾", "Beli VIP Pass (24 Jam)")
+    lbl_lapak, ico_lapak = await _btn_label_and_icon("ico_lapak", "🏪", "Pojok Lapak Partner")
+
     rows = [
-        [InlineKeyboardButton(text="🚪 Verifikasi & Masuk ke Bar", callback_data="enter_bar")],
+        [styled_btn(lbl_enter, callback_data="enter_bar", style="primary", icon_emoji_id=ico_enter)],
         [
-            InlineKeyboardButton(text="🕯️ Curhat ke CH (#confess)", callback_data="menu_confess"),
-            InlineKeyboardButton(text="💌 Kirim PM ke CH (#pm)", callback_data="menu_pm"),
+            styled_btn(lbl_confess, callback_data="menu_confess", icon_emoji_id=ico_confess),
+            styled_btn(lbl_pm, callback_data="menu_pm", icon_emoji_id=ico_pm),
         ],
         [
-            InlineKeyboardButton(text="💳 Kartu Member & Mutasi", callback_data="my_wallet"),
-            InlineKeyboardButton(text="📅 Absen Harian", callback_data="claim_daily"),
+            styled_btn(lbl_wallet, callback_data="my_wallet", icon_emoji_id=ico_wallet),
+            styled_btn(lbl_daily, callback_data="claim_daily", style="success", icon_emoji_id=ico_daily),
         ],
         [
-            InlineKeyboardButton(text="🎯 Misi Harian", callback_data="daily_quests"),
-            InlineKeyboardButton(text="🎟️ Undang Teman", callback_data="my_referral"),
+            styled_btn("🎯 Misi Harian", callback_data="daily_quests"),
+            styled_btn("🎟️ Undang Teman", callback_data="my_referral"),
         ],
         [
-            InlineKeyboardButton(text="🍾 Beli VIP Pass (24 Jam)", callback_data="buy_vip"),
-            InlineKeyboardButton(text="🏪 Pojok Lapak Partner", callback_data="browse_lapak"),
+            styled_btn(lbl_vip, callback_data="buy_vip", style="success", icon_emoji_id=ico_vip),
+            styled_btn(lbl_lapak, callback_data="browse_lapak", icon_emoji_id=ico_lapak),
         ],
         [
-            InlineKeyboardButton(text="🎁 Kirim Gift / Hadiah", callback_data="menu_gift"),
-            InlineKeyboardButton(text="📖 Buku Panduan Bar", callback_data="info_menu"),
+            styled_btn("🎁 Kirim Gift / Hadiah", callback_data="menu_gift"),
+            styled_btn("📖 Buku Panduan Bar", callback_data="info_menu"),
         ],
     ]
 
     if is_admin_or_owner:
-        rows.insert(0, [InlineKeyboardButton(text="🛡️ Panel Kontrol Admin / Owner", callback_data="open_admin_panel")])
+        rows.insert(0, [styled_btn("🛡️ Panel Kontrol Admin / Owner", callback_data="open_admin_panel", style="danger")])
 
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def info_categories_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🥂 Command Bar, Menu VIP & Mini-Game", callback_data="info_cmd_bar")],
-        [InlineKeyboardButton(text="🎶 Command Musik & Jukebox (Kaelen)", callback_data="info_cmd_music")],
-        [InlineKeyboardButton(text="💼 Panduan Shift Kerja (50 VC)", callback_data="info_cmd_shift")],
-        [InlineKeyboardButton(text="🎯 Ekonomi VC, Misi & Referral", callback_data="info_economy")],
-        [InlineKeyboardButton(text="🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
+        [styled_btn("🥂 Command Bar, Menu VIP & Mini-Game", callback_data="info_cmd_bar")],
+        [styled_btn("🎶 Command Musik & Jukebox (Kaelen)", callback_data="info_cmd_music")],
+        [styled_btn("💼 Panduan Shift Kerja (50 VC)", callback_data="info_cmd_shift")],
+        [styled_btn("🎯 Ekonomi VC, Misi & Referral", callback_data="info_economy")],
+        [styled_btn("🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
     ])
 
 
 def back_info_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅️ Kembali ke Kategori Panduan", callback_data="info_menu")],
-        [InlineKeyboardButton(text="🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
+        [styled_btn("⬅️ Kembali ke Kategori Panduan", callback_data="info_menu")],
+        [styled_btn("🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
     ])
