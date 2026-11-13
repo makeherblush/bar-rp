@@ -1,7 +1,6 @@
 import html
 import asyncio
 import logging
-from datetime import datetime
 
 from aiogram import Dispatcher, F, types
 from aiogram.filters import Command
@@ -28,6 +27,7 @@ dp.include_router(gate_wallet_router)
 dp.include_router(shop_gift_router)
 dp.include_router(confess_pm_router)
 
+
 class AdminActionState(StatesGroup):
     waiting_new_pw = State()
     waiting_channel_id = State()
@@ -36,6 +36,7 @@ class AdminActionState(StatesGroup):
     waiting_delshop = State()
     waiting_addadmin = State()
     waiting_deladmin = State()
+
 
 async def _build_admin_dashboard(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     is_owner = (user_id == OWNER_ID)
@@ -94,6 +95,7 @@ async def _build_admin_dashboard(user_id: int) -> tuple[str, InlineKeyboardMarku
 
     return text, InlineKeyboardMarkup(inline_keyboard=buttons)
 
+
 # --- ENTRY POINT PANEL ADMIN/OWNER (TOMBOL & /admin) ---
 @dp.callback_query(F.data == "open_admin_panel")
 async def cb_open_admin_panel(call: types.CallbackQuery, state: FSMContext):
@@ -105,6 +107,7 @@ async def cb_open_admin_panel(call: types.CallbackQuery, state: FSMContext):
     text, kb = await _build_admin_dashboard(user_id)
     await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
 
+
 @dp.message(Command("admin"), F.chat.type == "private")
 async def cmd_admin_panel(message: types.Message, state: FSMContext):
     await state.clear()
@@ -113,6 +116,7 @@ async def cmd_admin_panel(message: types.Message, state: FSMContext):
         return
     text, kb = await _build_admin_dashboard(user_id)
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
 
 @dp.callback_query(F.data == "adm_list_overview")
 async def cb_adm_list_overview(call: types.CallbackQuery):
@@ -145,6 +149,7 @@ async def cb_adm_list_overview(call: types.CallbackQuery):
         reply_markup=kb
     )
 
+
 # --- INTERAKTIF: PASSWORD PINTU BAR ---
 @dp.callback_query(F.data == "adm_setpw")
 async def cb_adm_setpw(call: types.CallbackQuery, state: FSMContext):
@@ -159,6 +164,7 @@ async def cb_adm_setpw(call: types.CallbackQuery, state: FSMContext):
         parse_mode=ParseMode.HTML,
         reply_markup=kb
     )
+
 
 @dp.message(AdminActionState.waiting_new_pw, F.chat.type == "private")
 async def fsm_adm_setpw(message: types.Message, state: FSMContext):
@@ -179,6 +185,7 @@ async def fsm_adm_setpw(message: types.Message, state: FSMContext):
         reply_markup=kb
     )
 
+
 @dp.callback_query(F.data == "adm_delpw")
 async def cb_adm_delpw(call: types.CallbackQuery):
     if call.from_user.id != OWNER_ID:
@@ -187,6 +194,7 @@ async def cb_adm_delpw(call: types.CallbackQuery):
     await call.answer("Password pintu dimatikan!", show_alert=True)
     text, kb = await _build_admin_dashboard(call.from_user.id)
     await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
 
 @dp.message(Command("setpw"), F.chat.type == "private")
 async def cmd_setpw(message: types.Message):
@@ -212,6 +220,7 @@ async def cmd_setpw(message: types.Message):
         parse_mode=ParseMode.HTML
     )
 
+
 @dp.message(Command("delpw"), F.chat.type == "private")
 async def cmd_delpw(message: types.Message):
     if message.from_user.id != OWNER_ID:
@@ -219,6 +228,7 @@ async def cmd_delpw(message: types.Message):
 
     await set_bar_setting("door_password", None)
     await message.answer("🔓 <b>Password pintu masuk bar dimatikan.</b> Tamu dengan simbol CN dapat langsung masuk.", parse_mode=ParseMode.HTML)
+
 
 # --- INTERAKTIF & VALIDASI LIVE: ATUR CHANNEL CONFESS & PM ---
 async def _apply_and_verify_channel(raw_ch: str) -> str:
@@ -250,6 +260,7 @@ async def _apply_and_verify_channel(raw_ch: str) -> str:
             f"• <i>Pastikan Hans sudah dimasukkan sebagai Admin ke dalam channel tersebut.</i>"
         )
 
+
 @dp.callback_query(F.data == "adm_setch")
 async def cb_adm_setch(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id != OWNER_ID:
@@ -265,6 +276,7 @@ async def cb_adm_setch(call: types.CallbackQuery, state: FSMContext):
         reply_markup=kb
     )
 
+
 @dp.message(AdminActionState.waiting_channel_id, F.chat.type == "private")
 async def fsm_adm_setch(message: types.Message, state: FSMContext):
     if message.from_user.id != OWNER_ID:
@@ -279,6 +291,7 @@ async def fsm_adm_setch(message: types.Message, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Kembali ke Panel Kontrol", callback_data="open_admin_panel")]])
     await message.answer(res, parse_mode=ParseMode.HTML, reply_markup=kb)
 
+
 @dp.message(Command("setch"), F.chat.type == "private")
 async def cmd_setch(message: types.Message):
     if message.from_user.id != OWNER_ID:
@@ -290,6 +303,7 @@ async def cmd_setch(message: types.Message):
 
     res = await _apply_and_verify_channel(parts[1])
     await message.answer(res, parse_mode=ParseMode.HTML)
+
 
 # --- INTERAKTIF & SLASH: SUNTIK SALDO VC (/givevc) ---
 async def _execute_givevc(target_ident: str, amount: int) -> str:
@@ -323,6 +337,7 @@ async def _execute_givevc(target_ident: str, amount: int) -> str:
         f"• <b>Saldo Akhir:</b> <b>{new_coins} VC</b>"
     )
 
+
 @dp.callback_query(F.data == "adm_givevc")
 async def cb_adm_givevc(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id != OWNER_ID:
@@ -337,6 +352,7 @@ async def cb_adm_givevc(call: types.CallbackQuery, state: FSMContext):
         parse_mode=ParseMode.HTML,
         reply_markup=kb
     )
+
 
 @dp.message(AdminActionState.waiting_givevc, F.chat.type == "private")
 async def fsm_adm_givevc(message: types.Message, state: FSMContext):
@@ -356,6 +372,7 @@ async def fsm_adm_givevc(message: types.Message, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Kembali ke Panel Kontrol", callback_data="open_admin_panel")]])
     await message.answer(res, parse_mode=ParseMode.HTML, reply_markup=kb)
 
+
 @dp.message(Command("givevc"), F.chat.type == "private")
 async def cmd_givevc(message: types.Message):
     if message.from_user.id != OWNER_ID:
@@ -367,6 +384,7 @@ async def cmd_givevc(message: types.Message):
 
     res = await _execute_givevc(parts[1], int(parts[2]))
     await message.answer(res, parse_mode=ParseMode.HTML)
+
 
 # --- INTERAKTIF & SLASH: LAPAK PARTNER (/addshop & /delshop) ---
 async def _execute_addshop(target_ident: str, shop_name: str) -> str:
@@ -400,6 +418,7 @@ async def _execute_addshop(target_ident: str, shop_name: str) -> str:
         f"• <b>Pemilik:</b> {html.escape(user['full_name'])} (@{user['username']})"
     )
 
+
 @dp.callback_query(F.data == "adm_addshop")
 async def cb_adm_addshop(call: types.CallbackQuery, state: FSMContext):
     if not await is_staff_or_owner(call.from_user.id):
@@ -415,9 +434,200 @@ async def cb_adm_addshop(call: types.CallbackQuery, state: FSMContext):
         reply_markup=kb
     )
 
+
 @dp.message(AdminActionState.waiting_addshop, F.chat.type == "private")
-async def fsm_adm_addshoawait register_hans_commands()
+async def fsm_adm_addshop(message: types.Message, state: FSMContext):
+    if not await is_staff_or_owner(message.from_user.id):
+        return
+    if not message.text or message.text.startswith("/cancel"):
+        await state.clear()
+        text, kb = await _build_admin_dashboard(message.from_user.id)
+        return await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        return await message.answer("Format salah. Ketik: <code>@username Nama Toko</code>", parse_mode=ParseMode.HTML)
+
+    res = await _execute_addshop(parts[0], parts[1].strip())
+    await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Kembali ke Panel Kontrol", callback_data="open_admin_panel")]])
+    await message.answer(res, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+@dp.message(Command("addshop"), F.chat.type == "private")
+async def cmd_addshop(message: types.Message):
+    if not await is_staff_or_owner(message.from_user.id):
+        return
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        return await message.answer("Format: <code>/addshop @username Nama Toko</code>", parse_mode=ParseMode.HTML)
+
+    res = await _execute_addshop(parts[1], parts[2].strip())
+    await message.answer(res, parse_mode=ParseMode.HTML)
+
+
+@dp.callback_query(F.data == "adm_delshop")
+async def cb_adm_delshop(call: types.CallbackQuery, state: FSMContext):
+    if not await is_staff_or_owner(call.from_user.id):
+        return await call.answer("Akses ditolak.", show_alert=True)
+    await call.answer()
+    await state.set_state(AdminActionState.waiting_delshop)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Batal", callback_data="open_admin_panel")]])
+    await call.message.edit_text(
+        "🗑️ <b>HAPUS LAPAK PARTNER</b>\n\n"
+        "Ketik <b>ID Toko</b> (angka) yang ingin dihapus (cek ID di menu <i>Daftar Lapak & Staf Admin</i>):",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb
+    )
+
+
+@dp.message(AdminActionState.waiting_delshop, F.chat.type == "private")
+async def fsm_adm_delshop(message: types.Message, state: FSMContext):
+    if not await is_staff_or_owner(message.from_user.id):
+        return
+    if not message.text or message.text.startswith("/cancel"):
+        await state.clear()
+        text, kb = await _build_admin_dashboard(message.from_user.id)
+        return await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+    if not message.text.strip().isdigit():
+        return await message.answer("Masukkan angka ID Toko yang valid.")
+
+    shop_id = int(message.text.strip())
+    async with db.pool.acquire() as conn:
+        deleted = await conn.fetchval("DELETE FROM partner_shops WHERE id = $1 RETURNING shop_name", shop_id)
+
+    await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Kembali ke Panel Kontrol", callback_data="open_admin_panel")]])
+    if deleted:
+        await message.answer(f"🗑️ Lapak <b>{html.escape(deleted)}</b> (ID: <code>{shop_id}</code>) telah dihapus.", parse_mode=ParseMode.HTML, reply_markup=kb)
+    else:
+        await message.answer(f"⚠️ Lapak dengan ID <code>{shop_id}</code> tidak ditemukan.", parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+@dp.message(Command("delshop"), F.chat.type == "private")
+async def cmd_delshop(message: types.Message):
+    if not await is_staff_or_owner(message.from_user.id):
+        return
+    parts = message.text.split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        return await message.answer("Format: <code>/delshop ID_Toko</code>", parse_mode=ParseMode.HTML)
+    shop_id = int(parts[1])
+    async with db.pool.acquire() as conn:
+        deleted = await conn.fetchval("DELETE FROM partner_shops WHERE id = $1 RETURNING shop_name", shop_id)
+    if deleted:
+        await message.answer(f"🗑️ Lapak <b>{html.escape(deleted)}</b> (ID: <code>{shop_id}</code>) telah dihapus.", parse_mode=ParseMode.HTML)
+    else:
+        await message.answer(f"⚠️ Lapak ID <code>{shop_id}</code> tidak ditemukan.", parse_mode=ParseMode.HTML)
+
+
+# --- INTERAKTIF & SLASH: KELOLA STAF ADMIN (/addadmin & /deladmin) ---
+async def _set_admin_role(target_ident: str, make_admin: bool) -> str:
+    async with db.pool.acquire() as conn:
+        user = await resolve_target_user(conn, target_ident)
+        if not user:
+            return f"❌ User <code>{html.escape(target_ident)}</code> tidak ditemukan di database Hans."
+        await conn.execute("UPDATE users SET is_admin = $1 WHERE user_id = $2", make_admin, user["user_id"])
+
+    if make_admin:
+        return f"✅ <b>{html.escape(user['full_name'])}</b> (@{user['username']}) sekarang memiliki akses <b>Staf Admin</b>."
+    return f"🗑️ Akses Staf Admin untuk <b>{html.escape(user['full_name'])}</b> (@{user['username']}) telah dicabut."
+
+
+@dp.callback_query(F.data == "adm_addadmin")
+async def cb_adm_addadmin(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != OWNER_ID:
+        return await call.answer("Khusus Owner bar!", show_alert=True)
+    await call.answer()
+    await state.set_state(AdminActionState.waiting_addadmin)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Batal", callback_data="open_admin_panel")]])
+    await call.message.edit_text(
+        "👮 <b>ANGKAT STAF ADMIN BARU</b>\n\nKetik <b>@username</b> (atau User ID) yang ingin diangkat menjadi Staf Admin:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb
+    )
+
+
+@dp.message(AdminActionState.waiting_addadmin, F.chat.type == "private")
+async def fsm_adm_addadmin(message: types.Message, state: FSMContext):
+    if message.from_user.id != OWNER_ID:
+        return
+    if not message.text or message.text.startswith("/cancel"):
+        await state.clear()
+        text, kb = await _build_admin_dashboard(message.from_user.id)
+        return await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+    res = await _set_admin_role(message.text.strip().split()[0], True)
+    await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Kembali ke Panel Kontrol", callback_data="open_admin_panel")]])
+    await message.answer(res, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+@dp.callback_query(F.data == "adm_deladmin")
+async def cb_adm_deladmin(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != OWNER_ID:
+        return await call.answer("Khusus Owner bar!", show_alert=True)
+    await call.answer()
+    await state.set_state(AdminActionState.waiting_deladmin)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Batal", callback_data="open_admin_panel")]])
+    await call.message.edit_text(
+        "🚫 <b>CABUT AKSES STAF ADMIN</b>\n\nKetik <b>@username</b> (atau User ID) yang ingin dicabut akses adminnya:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb
+    )
+
+
+@dp.message(AdminActionState.waiting_deladmin, F.chat.type == "private")
+async def fsm_adm_deladmin(message: types.Message, state: FSMContext):
+    if message.from_user.id != OWNER_ID:
+        return
+    if not message.text or message.text.startswith("/cancel"):
+        await state.clear()
+        text, kb = await _build_admin_dashboard(message.from_user.id)
+        return await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+    res = await _set_admin_role(message.text.strip().split()[0], False)
+    await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Kembali ke Panel Kontrol", callback_data="open_admin_panel")]])
+    await message.answer(res, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+@dp.message(Command("addadmin"), F.chat.type == "private")
+async def cmd_addadmin(message: types.Message):
+    if message.from_user.id != OWNER_ID:
+        return await message.answer("⚠️ Perintah ini merupakan hak eksklusif <b>Owner</b> bar.", parse_mode=ParseMode.HTML)
+    parts = message.text.split()
+    if len(parts) < 2:
+        return await message.answer("Format: <code>/addadmin @username</code>", parse_mode=ParseMode.HTML)
+    await message.answer(await _set_admin_role(parts[1], True), parse_mode=ParseMode.HTML)
+
+
+@dp.message(Command("deladmin"), F.chat.type == "private")
+async def cmd_deladmin(message: types.Message):
+    if message.from_user.id != OWNER_ID:
+        return await message.answer("⚠️ Perintah ini merupakan hak eksklusif <b>Owner</b> bar.", parse_mode=ParseMode.HTML)
+    parts = message.text.split()
+    if len(parts) < 2:
+        return await message.answer("Format: <code>/deladmin @username</code>", parse_mode=ParseMode.HTML)
+    await message.answer(await _set_admin_role(parts[1], False), parse_mode=ParseMode.HTML)
+
+
+async def register_hans_commands():
+    private_cmds = [
+        BotCommand(command="start", description="Buka Lobi Resepsionis & Pintu Masuk Bar"),
+        BotCommand(command="daily", description="Klaim Absen Harian (+20 VC)"),
+        BotCommand(command="confess", description="Kirim Curhat Anonim ke Channel (#confess)"),
+        BotCommand(command="admin", description="[Staf/Owner] Panel Kontrol Bar, Password & Lapak"),
+    ]
+    await bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
+
+
+async def main():
+    await db.init_db()
+    await ensure_hans_schema()
+    await register_hans_commands()
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
