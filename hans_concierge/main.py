@@ -14,7 +14,7 @@ import shared.database as db
 from shared.config import OWNER_ID
 from hans_concierge.helpers import (
     bot, ensure_hans_schema, is_staff_or_owner, resolve_target_user,
-    log_wallet_tx, get_bar_setting, set_bar_setting
+    log_wallet_tx, get_bar_setting, set_bar_setting, styled_btn
 )
 from hans_concierge.gate_wallet import router as gate_wallet_router
 from hans_concierge.shop_gift import router as shop_gift_router
@@ -36,6 +36,19 @@ class AdminActionState(StatesGroup):
     waiting_delshop = State()
     waiting_addadmin = State()
     waiting_deladmin = State()
+    waiting_custom_icon = State()
+
+
+CUSTOM_SLOTS = {
+    "ico_enter": "Tombol Masuk Bar",
+    "ico_confess": "Tombol Curhat (#confess)",
+    "ico_pm": "Tombol Kirim PM (#pm)",
+    "ico_wallet": "Tombol Kartu Member",
+    "ico_daily": "Tombol Absen Harian",
+    "ico_vip": "Tombol Beli VIP Pass",
+    "ico_lapak": "Tombol Lapak Partner",
+    "welcome_emoji": "Ikon Header /start",
+}
 
 
 async def _build_admin_dashboard(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -64,23 +77,24 @@ async def _build_admin_dashboard(user_id: int) -> tuple[str, InlineKeyboardMarku
         )
         buttons = [
             [
-                InlineKeyboardButton(text="🔐 Ganti Password Pintu", callback_data="adm_setpw"),
-                InlineKeyboardButton(text="🔓 Matikan Password", callback_data="adm_delpw"),
+                styled_btn("🔐 Ganti Password Pintu", callback_data="adm_setpw", style="primary"),
+                styled_btn("🔓 Matikan Password", callback_data="adm_delpw", style="danger"),
             ],
             [
-                InlineKeyboardButton(text="📢 Atur Channel CH", callback_data="adm_setch"),
-                InlineKeyboardButton(text="💰 Suntik Saldo VC", callback_data="adm_givevc"),
+                styled_btn("📢 Atur Channel CH", callback_data="adm_setch"),
+                styled_btn("💰 Suntik Saldo VC", callback_data="adm_givevc", style="success"),
             ],
             [
-                InlineKeyboardButton(text="🏪 Tambah Lapak", callback_data="adm_addshop"),
-                InlineKeyboardButton(text="🗑️ Hapus Lapak", callback_data="adm_delshop"),
+                styled_btn("🏪 Tambah Lapak", callback_data="adm_addshop"),
+                styled_btn("🗑️ Hapus Lapak", callback_data="adm_delshop"),
             ],
             [
-                InlineKeyboardButton(text="👮 Angkat Admin", callback_data="adm_addadmin"),
-                InlineKeyboardButton(text="🚫 Cabut Admin", callback_data="adm_deladmin"),
+                styled_btn("👮 Angkat Admin", callback_data="adm_addadmin"),
+                styled_btn("🚫 Cabut Admin", callback_data="adm_deladmin"),
             ],
-            [InlineKeyboardButton(text="📋 Daftar Lapak & Staf Admin", callback_data="adm_list_overview")],
-            [InlineKeyboardButton(text="🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
+            [styled_btn("🎨 Kustomisasi Custom Emoji Tombol & Teks", callback_data="adm_customize_ui", style="primary")],
+            [styled_btn("📋 Daftar Lapak & Staf Admin", callback_data="adm_list_overview")],
+            [styled_btn("🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
         ]
     else:
         text = (
@@ -90,11 +104,11 @@ async def _build_admin_dashboard(user_id: int) -> tuple[str, InlineKeyboardMarku
         )
         buttons = [
             [
-                InlineKeyboardButton(text="🏪 Tambah Lapak Partner", callback_data="adm_addshop"),
-                InlineKeyboardButton(text="🗑️ Hapus Lapak Partner", callback_data="adm_delshop"),
+                styled_btn("🏪 Tambah Lapak Partner", callback_data="adm_addshop", style="success"),
+                styled_btn("🗑️ Hapus Lapak Partner", callback_data="adm_delshop", style="danger"),
             ],
-            [InlineKeyboardButton(text="📋 Lihat Daftar Lapak", callback_data="adm_list_overview")],
-            [InlineKeyboardButton(text="🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
+            [styled_btn("📋 Lihat Daftar Lapak", callback_data="adm_list_overview")],
+            [styled_btn("🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
         ]
 
     return text, InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -109,6 +123,12 @@ async def cb_open_admin_panel(call: types.CallbackQuery, state: FSMContext):
         return await call.answer("Akses ditolak. Khusus Staf Admin dan Owner.", show_alert=True)
     await call.answer()
     text, kb = await _build_admin_dashboard(user_id)
+    if call.message.photo:
+        try:
+            await call.message.delete()
+        except Exception:
+            pass
+        return await call.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
     await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
 
 
@@ -161,7 +181,7 @@ async def cb_adm_setpw(call: types.CallbackQuery, state: FSMContext):
         return await call.answer("Khusus Owner bar!", show_alert=True)
     await call.answer()
     await state.set_state(AdminActionState.waiting_new_pw)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Batal", callback_data="open_admin_panel")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[styled_btn("❌ Batal", callback_data="open_admin_panel", style="danger")]])
     await call.message.edit_text(
         "🔐 <b>GANTI PASSWORD PINTU MASUK BAR</b>\n\n"
         "Ketik kata sandi baru yang harus dimasukkan tamu sebelum menerima tautan grup:",
@@ -271,7 +291,7 @@ async def cb_adm_setch(call: types.CallbackQuery, state: FSMContext):
         return await call.answer("Khusus Owner bar!", show_alert=True)
     await call.answer()
     await state.set_state(AdminActionState.waiting_channel_id)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Batal", callback_data="open_admin_panel")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[styled_btn("❌ Batal", callback_data="open_admin_panel", style="danger")]])
     await call.message.edit_text(
         "📢 <b>ATUR CHANNEL TUJUAN #CONFESS & #PM</b>\n\n"
         "Kirimkan <b>ID Channel</b> (contoh: <code>-1001234567890</code>) atau <b>@username_channel</b>.\n"
@@ -348,7 +368,7 @@ async def cb_adm_givevc(call: types.CallbackQuery, state: FSMContext):
         return await call.answer("Khusus Owner bar!", show_alert=True)
     await call.answer()
     await state.set_state(AdminActionState.waiting_givevc)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Batal", callback_data="open_admin_panel")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[styled_btn("❌ Batal", callback_data="open_admin_panel", style="danger")]])
     await call.message.edit_text(
         "💰 <b>SUNTIK / SESUAIKAN SALDO VC TAMU</b>\n\n"
         "Ketik <b>@username</b> (atau User ID) diikuti <b>jumlah VC</b>:\n"
@@ -429,7 +449,7 @@ async def cb_adm_addshop(call: types.CallbackQuery, state: FSMContext):
         return await call.answer("Akses ditolak.", show_alert=True)
     await call.answer()
     await state.set_state(AdminActionState.waiting_addshop)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Batal", callback_data="open_admin_panel")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[styled_btn("❌ Batal", callback_data="open_admin_panel", style="danger")]])
     await call.message.edit_text(
         "🏪 <b>DAFTARKAN LAPAK PARTNER BARU</b>\n\n"
         "Ketik <b>@username pemilik</b> diikuti <b>Nama Toko</b>:\n"
@@ -476,7 +496,7 @@ async def cb_adm_delshop(call: types.CallbackQuery, state: FSMContext):
         return await call.answer("Akses ditolak.", show_alert=True)
     await call.answer()
     await state.set_state(AdminActionState.waiting_delshop)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Batal", callback_data="open_admin_panel")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[styled_btn("❌ Batal", callback_data="open_admin_panel", style="danger")]])
     await call.message.edit_text(
         "🗑️ <b>HAPUS LAPAK PARTNER</b>\n\n"
         "Ketik <b>ID Toko</b> (angka) yang ingin dihapus (cek ID di menu <i>Daftar Lapak & Staf Admin</i>):",
@@ -544,7 +564,7 @@ async def cb_adm_addadmin(call: types.CallbackQuery, state: FSMContext):
         return await call.answer("Khusus Owner bar!", show_alert=True)
     await call.answer()
     await state.set_state(AdminActionState.waiting_addadmin)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Batal", callback_data="open_admin_panel")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[styled_btn("❌ Batal", callback_data="open_admin_panel", style="danger")]])
     await call.message.edit_text(
         "👮 <b>ANGKAT STAF ADMIN BARU</b>\n\nKetik <b>@username</b> (atau User ID) yang ingin diangkat menjadi Staf Admin:",
         parse_mode=ParseMode.HTML,
@@ -573,7 +593,7 @@ async def cb_adm_deladmin(call: types.CallbackQuery, state: FSMContext):
         return await call.answer("Khusus Owner bar!", show_alert=True)
     await call.answer()
     await state.set_state(AdminActionState.waiting_deladmin)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Batal", callback_data="open_admin_panel")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[styled_btn("❌ Batal", callback_data="open_admin_panel", style="danger")]])
     await call.message.edit_text(
         "🚫 <b>CABUT AKSES STAF ADMIN</b>\n\nKetik <b>@username</b> (atau User ID) yang ingin dicabut akses adminnya:",
         parse_mode=ParseMode.HTML,
@@ -616,12 +636,124 @@ async def cmd_deladmin(message: types.Message):
     await message.answer(await _set_admin_role(parts[1], False), parse_mode=ParseMode.HTML)
 
 
+# --- KUSTOMISASI CUSTOM EMOJI TOMBOL & HEADER LANGSUNG DI PC ---
+@dp.callback_query(F.data == "adm_customize_ui")
+async def cb_adm_customize_ui(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != OWNER_ID:
+        return await call.answer("Khusus Owner bar!", show_alert=True)
+    await state.clear()
+    await call.answer()
+
+    rows = []
+    items = list(CUSTOM_SLOTS.items())
+    for i in range(0, len(items), 2):
+        pair = items[i : i + 2]
+        row_btns = []
+        for key, label in pair:
+            saved_ico = await get_bar_setting(key)
+            prefix = "✅ " if saved_ico else "✨ "
+            row_btns.append(styled_btn(f"{prefix}{label}", callback_data=f"setico_{key}", icon_emoji_id=saved_ico))
+        rows.append(row_btns)
+
+    rows.append([styled_btn("🔄 Reset Semua Ikon ke Default", callback_data="reset_all_icons", style="danger")])
+    rows.append([styled_btn("⬅️ Kembali ke Panel Kontrol", callback_data="open_admin_panel")])
+
+    await call.message.edit_text(
+        "🎨 <b>KUSTOMISASI CUSTOM EMOJI & TAMPILAN HANS</b>\n\n"
+        "Pilih tombol atau header yang ingin kamu ganti ikonnya langsung dari chat ini "
+        "(tanda ✅ berarti sudah memakai custom emoji):",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@dp.callback_query(F.data.startswith("setico_"))
+async def cb_select_icon_slot(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != OWNER_ID:
+        return await call.answer("Khusus Owner bar!", show_alert=True)
+    slot_key = call.data.replace("setico_", "")
+    if slot_key not in CUSTOM_SLOTS:
+        return await call.answer("Slot tidak valid.", show_alert=True)
+
+    await call.answer()
+    await state.update_data(target_slot=slot_key)
+    await state.set_state(AdminActionState.waiting_custom_icon)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [styled_btn("🗑️ Hapus Ikon Kustom Ini", callback_data=f"delico_{slot_key}", style="danger")],
+        [styled_btn("❌ Batal", callback_data="adm_customize_ui")],
+    ])
+    await call.message.edit_text(
+        f"✨ <b>ATUR CUSTOM EMOJI: {CUSTOM_SLOTS[slot_key]}</b>\n\n"
+        "Sekarang cukup <b>kirimkan 1 Custom Emoji</b> (emoji bergerak Telegram Premium) ke chat ini:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb,
+    )
+
+
+@dp.callback_query(F.data.startswith("delico_"))
+async def cb_delete_icon_slot(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != OWNER_ID:
+        return
+    slot_key = call.data.replace("delico_", "")
+    await set_bar_setting(slot_key, None)
+    await state.clear()
+    await call.answer("Ikon dikembalikan ke default!", show_alert=True)
+    await cb_adm_customize_ui(call, state)
+
+
+@dp.callback_query(F.data == "reset_all_icons")
+async def cb_reset_all_icons(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != OWNER_ID:
+        return
+    for key in CUSTOM_SLOTS:
+        await set_bar_setting(key, None)
+    await call.answer("Semua ikon di-reset ke default!", show_alert=True)
+    await cb_adm_customize_ui(call, state)
+
+
+@dp.message(AdminActionState.waiting_custom_icon, F.chat.type == "private")
+async def fsm_save_custom_icon(message: types.Message, state: FSMContext):
+    if message.from_user.id != OWNER_ID:
+        return
+
+    emoji_id = None
+    if message.entities:
+        for e in message.entities:
+            if e.type == "custom_emoji" and e.custom_emoji_id:
+                emoji_id = e.custom_emoji_id
+                break
+
+    if not emoji_id:
+        return await message.answer(
+            "⚠️ Emoji yang dikirim bukan <b>Custom Emoji</b> Telegram Premium.\n"
+            "<i>Pilih emoji bergerak dari tab stiker/emoji custom Telegram kamu lalu kirim ulang:</i>",
+            parse_mode=ParseMode.HTML,
+        )
+
+    data = await state.get_data()
+    slot_key = data.get("target_slot")
+    await set_bar_setting(slot_key, emoji_id)
+    await state.clear()
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [styled_btn("🎨 Atur Tombol Lainnya", callback_data="adm_customize_ui", style="primary")],
+        [styled_btn("🏠 Lihat Hasil di Lobi Utama", callback_data="back_lobby", style="success")],
+    ])
+    await message.answer(
+        f"✅ <b>Berhasil!</b> Ikon <b>{CUSTOM_SLOTS.get(slot_key, slot_key)}</b> sudah diperbarui.\n"
+        f"• <b>ID Tersimpan:</b> <code>{emoji_id}</code>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb,
+    )
+
+
 async def register_hans_commands():
     private_cmds = [
         BotCommand(command="start", description="Buka Lobi Resepsionis & Pintu Masuk Bar"),
         BotCommand(command="daily", description="Klaim Absen Harian (+20 VC)"),
         BotCommand(command="confess", description="Kirim Curhat Anonim ke Channel (#confess)"),
-        BotCommand(command="admin", description="[Staf/Owner] Panel Kontrol Bar, Password & Lapak"),
+        BotCommand(command="admin", description="[Staf/Owner] Panel Kontrol Bar, Password & Tampilan"),
     ]
     await bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
 
