@@ -11,7 +11,7 @@ from aiogram.enums import ParseMode
 import shared.database as db
 from hans_concierge.helpers import (
     bot, OWNER_ID, GROUP_ID, REQUIRED_CN_SYMBOL, VIP_COST_24H, DAILY_REWARD_VC,
-    REFERRAL_BONUS_VC, DAILY_QUESTS, get_bar_setting, react_message,
+    REFERRAL_BONUS_VC, DAILY_QUESTS, get_bar_setting, react_message, styled_btn,
     get_or_create_referral_code, log_wallet_tx, add_quest_progress,
     insufficient_vc_kb, main_lobby_kb, info_categories_kb, back_info_kb
 )
@@ -60,7 +60,7 @@ async def _send_or_edit_lobby(
     return await target.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb, message_effect_id=effect_id)
 
 
-# --- GERBANG UTAMA (/start + KODE REFERRAL) ---
+# --- GERBANG UTAMA (/start + KODE REFERRAL + CUSTOM WELCOME ICON) ---
 @router.message(CommandStart(), F.chat.type == "private")
 async def cmd_start_hans(message: types.Message, state: FSMContext):
     await state.clear()
@@ -107,8 +107,11 @@ async def cmd_start_hans(message: types.Message, state: FSMContext):
         else f"⚠️ Belum terpasang (Wajib simbol <b>{REQUIRED_CN_SYMBOL}</b>)"
     )
 
+    welcome_ico = await get_bar_setting("welcome_emoji")
+    header_badge = f'<tg-emoji emoji-id="{welcome_ico}">🥂</tg-emoji> ' if welcome_ico else "🚪 "
+
     text = (
-        "🚪 <i>Lampu gantung kristal menyala temaram di balik tirai beludru merah...</i>\n\n"
+        f"{header_badge}<i>Lampu gantung kristal menyala temaram di balik tirai beludru merah...</i>\n\n"
         f"<b>\"Selamat malam, {html.escape(user.first_name)}. Saya Hans, Kepala Concierge di <i>The Velvet Hour</i>.\"</b>\n\n"
         f"• <b>Status CN:</b> {cn_badge}\n"
         f"• <b>Saldo Dompet:</b> <b>{cur_coins} VC</b>\n\n"
@@ -130,8 +133,11 @@ async def cb_back_lobby(call: types.CallbackQuery, state: FSMContext):
     async with db.pool.acquire() as conn:
         coins = await conn.fetchval("SELECT coins FROM users WHERE user_id = $1", user.id) or 0
 
+    welcome_ico = await get_bar_setting("welcome_emoji")
+    header_badge = f'<tg-emoji emoji-id="{welcome_ico}">🏛️</tg-emoji> ' if welcome_ico else "🏛️ "
+
     text = (
-        f"🏛️ <b>LOBI RESEPSIONIS — THE VELVET HOUR</b>\n\n"
+        f"{header_badge}<b>LOBI RESEPSIONIS — THE VELVET HOUR</b>\n\n"
         f"<i>Hans merapikan buku tamu kulit di atas meja mahoni.</i>\n"
         f"Tamu: <b>{html.escape(user.first_name)}</b> | Saldo: <b>{coins} VC</b>\n\n"
         f"Silakan pilih layanan yang kamu perlukan:"
@@ -174,8 +180,8 @@ async def _grant_bar_entry(user: types.User, target_msg: types.Message, edit: bo
             expire_date=datetime.utcnow() + timedelta(minutes=10)
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🥂 Melangkah Masuk ke Ruang Utama", url=invite.invite_link)],
-            [InlineKeyboardButton(text="⬅️ Kembali ke Lobi", callback_data="back_lobby")]
+            [styled_btn("🥂 Melangkah Masuk ke Ruang Utama", url=invite.invite_link, style="success")],
+            [styled_btn("⬅️ Kembali ke Lobi", callback_data="back_lobby")]
         ])
         out = (
             f"✅ <b>VERIFIKASI ATRIBUT ({REQUIRED_CN_SYMBOL}) BERHASIL</b>\n"
@@ -216,8 +222,8 @@ async def cb_enter_bar(call: types.CallbackQuery, state: FSMContext):
     if REQUIRED_CN_SYMBOL not in current_name:
         await call.answer(f"Simbol {REQUIRED_CN_SYMBOL} belum terdeteksi di nama Telegram kamu!", show_alert=True)
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Saya Sudah Pasang Simbol, Cek Ulang", callback_data="enter_bar")],
-            [InlineKeyboardButton(text="🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
+            [styled_btn("🔄 Saya Sudah Pasang Simbol, Cek Ulang", callback_data="enter_bar", style="primary")],
+            [styled_btn("🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
         ])
         return await _send_or_edit_lobby(
             call,
@@ -237,7 +243,7 @@ async def cb_enter_bar(call: types.CallbackQuery, state: FSMContext):
         await call.answer()
         await state.set_state(GatePasswordState.waiting_password)
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Batal & Kembali ke Lobi", callback_data="back_lobby")]
+            [styled_btn("❌ Batal & Kembali ke Lobi", callback_data="back_lobby", style="danger")]
         ])
         return await _send_or_edit_lobby(
             call,
@@ -266,7 +272,7 @@ async def fsm_check_door_password(message: types.Message, state: FSMContext):
 
     await react_message(message.chat.id, message.message_id, "👎")
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Batal & Kembali ke Lobi", callback_data="back_lobby")]
+        [styled_btn("❌ Batal & Kembali ke Lobi", callback_data="back_lobby", style="danger")]
     ])
     await message.answer(
         "❌ <b>Kata sandi tidak cocok!</b>\n"
@@ -424,13 +430,13 @@ async def cb_daily_quests(call: types.CallbackQuery):
             status = "✅ <i>Sudah diklaim</i>"
         elif cur >= target:
             status = f"🎁 <b>Siap Klaim (+{meta['reward']} VC)!</b>"
-            buttons.append([InlineKeyboardButton(text=f"🎁 Klaim {meta['title']} (+{meta['reward']} VC)", callback_data=f"claimq_{q_key}")])
+            buttons.append([styled_btn(f"🎁 Klaim {meta['title']} (+{meta['reward']} VC)", callback_data=f"claimq_{q_key}", style="success")])
         else:
             status = f"⏳ Progres: <b>{cur}/{target}</b> (Hadiah: +{meta['reward']} VC)"
 
         lines.append(f"• <b>{meta['title']}</b>\n  {meta['desc']}\n  {status}")
 
-    buttons.append([InlineKeyboardButton(text="🏠 Kembali ke Lobi Utama", callback_data="back_lobby")])
+    buttons.append([styled_btn("🏠 Kembali ke Lobi Utama", callback_data="back_lobby")])
     text = (
         "🎯 <b>MISI HARIAN — THE VELVET HOUR</b>\n"
         "<i>Selesaikan aktivitas ringan setiap hari untuk mendapatkan bonus Velvet Coins:</i>\n\n"
