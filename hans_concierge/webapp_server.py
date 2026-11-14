@@ -18,13 +18,6 @@ julian_bot = Bot(token=cfg.TOKEN_JULIAN)
 kaelen_bot = Bot(token=cfg.TOKEN_KAELEN) if getattr(cfg, "TOKEN_KAELEN", None) else julian_bot
 hans_bot = Bot(token=cfg.TOKEN_HANS)
 
-DEFAULT_SERVICE_GIFS = {
-    "drink": "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExbGZ4eG9yNnR5bW5wZ3J6b2R4Y2Y1bTZ2Y2F2eG9yNnR5bW5wZ3J6eiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/l41lJ8ywG1ncm9FXW/giphy.gif",
-    "custom_mix": "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExbGZ4eG9yNnR5bW5wZ3J6b2R4Y2Y1bTZ2Y2F2eG9yNnR5bW5wZ3J6eiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/l41lJ8ywG1ncm9FXW/giphy.gif",
-    "food": "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExd2J4cW12bG14Y2Y1bTZ2Y2F2eG9yNnR5bW5wZ3J6b2R4Y2Y1bTZ2eiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3o7TKP9ln2Dr6ze6f6/giphy.gif",
-    "song": "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExaG12bG14Y2Y1bTZ2Y2F2eG9yNnR5bW5wZ3J6b2R4Y2Y1bTZ2Y2F2eiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/tJU72w9lPzUPe/giphy.gif",
-}
-
 EMBEDDED_HTML = """<!DOCTYPE html>
 <html lang="id">
 <head>
@@ -677,6 +670,9 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       if (tg.setBackgroundColor) tg.setBackgroundColor('#0a0608');
     }
 
+    const urlParams = new URLSearchParams(window.location.search);
+    const activeThreadId = urlParams.get("thread_id") || urlParams.get("topic_id") || (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param ? tg.initDataUnsafe.start_param : "");
+
     const MENUS = {
       drinksReg: [
         { code: "negroni", emoji: "🥃", name: "Classic Negroni", desc: "Perpaduan Gin, Campari & sweet vermouth dengan kulit jeruk.", price: 0 },
@@ -836,7 +832,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         const res = await fetch("/api/me", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ initData: tg ? tg.initData : "" })
+          body: JSON.stringify({ initData: tg ? tg.initData : "", thread_id: activeThreadId })
         });
         const data = await res.json();
         if (data.ok) {
@@ -898,7 +894,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       const res = await fetch("/api/order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ initData: tg ? tg.initData : "", category: "lapak", item_id: itemId, item_name: title, price: price })
+        body: JSON.stringify({ initData: tg ? tg.initData : "", category: "lapak", item_id: itemId, item_name: title, price: price, thread_id: activeThreadId })
       });
       const data = await res.json();
       if (data.ok) {
@@ -916,7 +912,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       const res = await fetch("/api/order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ initData: tg ? tg.initData : "", category, code, item_name: itemName, price })
+        body: JSON.stringify({ initData: tg ? tg.initData : "", category, code, item_name: itemName, price, thread_id: activeThreadId })
       });
       const data = await res.json();
       if (data.ok) {
@@ -975,6 +971,17 @@ def _authenticate_user(init_data: str) -> dict | None:
     return None
 
 
+def _parse_thread_id(raw_val) -> int | None:
+    if raw_val is None:
+        return None
+    s = str(raw_val).strip()
+    if s.startswith("topic_"):
+        s = s.replace("topic_", "", 1)
+    elif s.startswith("thread_"):
+        s = s.replace("thread_", "", 1)
+    return int(s) if s.isdigit() and int(s) > 0 else None
+
+
 def _make_ref_code(uid: int) -> str:
     digest = hashlib.sha1(f"velvet:{uid}".encode()).hexdigest()[:5].upper()
     return f"VH-{digest}"
@@ -1009,6 +1016,51 @@ async def _ensure_webapp_schema_and_user(conn, tg_user: dict):
             full_name = EXCLUDED.full_name,
             referral_code = COALESCE(NULLIF(users.referral_code, ''), EXCLUDED.referral_code);
     """, uid, username, full_name, default_ref_code)
+
+
+async def _resolve_vip_booth_thread(conn, uid: int, req_thread_id: int | None, user_last_thread: int | None) -> tuple[int | None, str | None]:
+    """Cari topik booth VIP aktif milik user dari parameter request, tabel booth VIP, atau last_thread_id."""
+    booth_tables = ["vip_booths", "private_booths", "booths", "vip_rooms", "lounge_booths"]
+    for tbl in booth_tables:
+        rows = await conn.fetch(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = $1",
+            tbl,
+        )
+        if not rows:
+            continue
+        cols = {r["column_name"] for r in rows}
+        tid_col = next((c for c in ("thread_id", "topic_id", "message_thread_id") if c in cols), None)
+        name_col = next((c for c in ("booth_name", "topic_name", "room_name", "title", "name") if c in cols), None)
+        if not tid_col:
+            continue
+
+        order_clause = "ORDER BY id DESC" if "id" in cols else ""
+        active_clause = "AND is_active = TRUE" if "is_active" in cols else ""
+
+        if req_thread_id:
+            q = f"SELECT {tid_col} AS tid" + (f", {name_col} AS bname" if name_col else ", NULL AS bname") + f" FROM {tbl} WHERE {tid_col} = $1 {active_clause} {order_clause} LIMIT 1"
+            row = await conn.fetchrow(q, req_thread_id)
+            if row and row["tid"]:
+                return int(row["tid"]), row["bname"]
+
+        owner_col = next((c for c in ("owner_id", "user_id", "vip_user_id", "host_id") if c in cols), None)
+        if owner_col:
+            q = f"SELECT {tid_col} AS tid" + (f", {name_col} AS bname" if name_col else ", NULL AS bname") + f" FROM {tbl} WHERE {owner_col} = $1 {active_clause} {order_clause} LIMIT 1"
+            row = await conn.fetchrow(q, uid)
+            if row and row["tid"]:
+                return int(row["tid"]), row["bname"]
+
+        if "members" in cols:
+            q = f"SELECT {tid_col} AS tid" + (f", {name_col} AS bname" if name_col else ", NULL AS bname") + f" FROM {tbl} WHERE $1 = ANY(members) {active_clause} {order_clause} LIMIT 1"
+            try:
+                row = await conn.fetchrow(q, uid)
+                if row and row["tid"]:
+                    return int(row["tid"]), row["bname"]
+            except Exception:
+                pass
+
+    resolved_tid = req_thread_id or user_last_thread or getattr(cfg, "DEFAULT_THREAD_ID", None)
+    return resolved_tid, None
 
 
 async def _enqueue_kaelen_song(conn, uid: int, requester_name: str, song_query: str, thread_id: int | None):
@@ -1080,7 +1132,9 @@ async def _enqueue_kaelen_song(conn, uid: int, requester_name: str, song_query: 
         )
 
 
-async def _get_custom_service_media(category: str) -> tuple[str, str]:
+async def _get_custom_service_media(category: str) -> tuple[str | None, str | None]:
+    if category == "song":
+        return None, None
     key = f"menu_{category}"
     try:
         async with db.pool.acquire() as conn:
@@ -1089,28 +1143,39 @@ async def _get_custom_service_media(category: str) -> tuple[str, str]:
                 return row["file_id"], row["media_type"]
     except Exception:
         pass
-    return DEFAULT_SERVICE_GIFS.get(category, DEFAULT_SERVICE_GIFS["drink"]), "animation"
+    return None, None
+
+
+async def _auto_delete_later(bot_client: Bot, chat_id: int, message_id: int, delay: float = 45.0):
+    await asyncio.sleep(delay)
+    try:
+        await bot_client.delete_message(chat_id, message_id)
+    except Exception:
+        pass
 
 
 async def _send_group_media_or_text(
     bot_client: Bot,
     caption: str,
     media_src: str | None = None,
-    mtype: str = "animation",
+    mtype: str | None = None,
     thread_id: int | None = None,
     uid_to_clear_thread: int | None = None,
+    auto_delete_sec: float | None = 45.0,
 ):
     """Kirim ke topik aktif user; jika topik sudah dihapus/tidak valid, otomatis fallback ke General."""
     attempts = [thread_id, None] if thread_id else [None]
+    sent_msg = None
     for tid in attempts:
         kwargs = {"message_thread_id": tid} if tid else {}
         try:
             if media_src and mtype == "photo":
-                return await bot_client.send_photo(cfg.GROUP_ID, photo=media_src, caption=caption, parse_mode=ParseMode.HTML, **kwargs)
+                sent_msg = await bot_client.send_photo(cfg.GROUP_ID, photo=media_src, caption=caption, parse_mode=ParseMode.HTML, **kwargs)
             elif media_src:
-                return await bot_client.send_animation(cfg.GROUP_ID, animation=media_src, caption=caption, parse_mode=ParseMode.HTML, **kwargs)
+                sent_msg = await bot_client.send_animation(cfg.GROUP_ID, animation=media_src, caption=caption, parse_mode=ParseMode.HTML, **kwargs)
             else:
-                return await bot_client.send_message(cfg.GROUP_ID, text=caption, parse_mode=ParseMode.HTML, **kwargs)
+                sent_msg = await bot_client.send_message(cfg.GROUP_ID, text=caption, parse_mode=ParseMode.HTML, **kwargs)
+            break
         except Exception as e:
             err_lower = str(e).lower()
             if tid and "thread not found" in err_lower:
@@ -1123,11 +1188,16 @@ async def _send_group_media_or_text(
                 continue
             if media_src:
                 try:
-                    return await bot_client.send_message(cfg.GROUP_ID, text=caption, parse_mode=ParseMode.HTML, **kwargs)
+                    sent_msg = await bot_client.send_message(cfg.GROUP_ID, text=caption, parse_mode=ParseMode.HTML, **kwargs)
+                    break
                 except Exception as e2:
                     if tid and "thread not found" in str(e2).lower():
                         continue
             raise
+
+    if sent_msg and auto_delete_sec and auto_delete_sec > 0:
+        asyncio.create_task(_auto_delete_later(bot_client, cfg.GROUP_ID, sent_msg.message_id, auto_delete_sec))
+    return sent_msg
 
 
 async def _serve_with_bartender_animation(
@@ -1137,8 +1207,10 @@ async def _serve_with_bartender_animation(
     is_vip: bool,
     thread_id: int | None = None,
     uid: int | None = None,
+    booth_name: str | None = None,
 ):
     vip_tag = " 👑" if is_vip else ""
+    booth_line = f"\n📍 <i>VIP Booth: {html.escape(booth_name)}</i>" if booth_name else ""
 
     if category in ("drink", "custom_mix"):
         try:
@@ -1148,6 +1220,7 @@ async def _serve_with_bartender_animation(
                 media_src=None,
                 thread_id=thread_id,
                 uid_to_clear_thread=uid,
+                auto_delete_sec=None,
             )
             await asyncio.sleep(1.5)
             if prep_msg:
@@ -1160,9 +1233,9 @@ async def _serve_with_bartender_animation(
             if category == "custom_mix"
             else f"🍸 Julian menggeser segelas <b>{item_name}</b> di atas meja bar mahoni menuju {mention}{vip_tag}."
         )
-        caption = f"{action_line}\n\n<i>\"Silakan dinikmati malam ini.\"</i>"
+        caption = f"{action_line}{booth_line}\n\n<i>\"Silakan dinikmati malam ini.\"</i>"
         media_src, mtype = await _get_custom_service_media(category)
-        await _send_group_media_or_text(julian_bot, caption, media_src, mtype, thread_id, uid)
+        await _send_group_media_or_text(julian_bot, caption, media_src, mtype, thread_id, uid, auto_delete_sec=45.0)
 
     elif category == "food":
         try:
@@ -1172,6 +1245,7 @@ async def _serve_with_bartender_animation(
                 media_src=None,
                 thread_id=thread_id,
                 uid_to_clear_thread=uid,
+                auto_delete_sec=None,
             )
             await asyncio.sleep(1.7)
             if prep_msg:
@@ -1180,11 +1254,11 @@ async def _serve_with_bartender_animation(
             pass
 
         caption = (
-            f"🍽️ Hidangan hangat <b>{item_name}</b> baru saja keluar dari dapur dan disajikan ke meja {mention}{vip_tag}.\n\n"
+            f"🍽️ Hidangan hangat <b>{item_name}</b> baru saja keluar dari dapur dan disajikan ke meja {mention}{vip_tag}.{booth_line}\n\n"
             f"<i>\"Selamat menikmati santapan malam Anda.\"</i>"
         )
         media_src, mtype = await _get_custom_service_media("food")
-        await _send_group_media_or_text(julian_bot, caption, media_src, mtype, thread_id, uid)
+        await _send_group_media_or_text(julian_bot, caption, media_src, mtype, thread_id, uid, auto_delete_sec=45.0)
 
 
 async def handle_index(request: web.Request) -> web.Response:
@@ -1202,8 +1276,11 @@ async def handle_api_me(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": "Sesi tidak valid"}, status=401)
 
     uid = int(tg_user["id"])
+    req_thread_id = _parse_thread_id(body.get("thread_id"))
     async with db.pool.acquire() as conn:
         await _ensure_webapp_schema_and_user(conn, tg_user)
+        if req_thread_id:
+            await conn.execute("UPDATE users SET last_thread_id = $1 WHERE user_id = $2", req_thread_id, uid)
         row = await conn.fetchrow(
             "SELECT coins, charm_points, is_vip, vip_until, referral_code, referred_by, referral_count FROM users WHERE user_id = $1",
             uid,
@@ -1303,6 +1380,7 @@ async def handle_api_order(request: web.Request) -> web.Response:
     first_name = html.escape(raw_first)
     mention = f'<a href="tg://user?id={uid}">{first_name}</a>'
     category = body.get("category", "drink")
+    req_thread_id = _parse_thread_id(body.get("thread_id"))
 
     if category == "lapak":
         item_id = int(body.get("item_id", 0))
@@ -1352,6 +1430,9 @@ async def handle_api_order(request: web.Request) -> web.Response:
     async with db.pool.acquire() as conn:
         async with conn.transaction():
             await _ensure_webapp_schema_and_user(conn, tg_user)
+            if req_thread_id:
+                await conn.execute("UPDATE users SET last_thread_id = $1 WHERE user_id = $2", req_thread_id, uid)
+
             row = await conn.fetchrow(
                 "SELECT coins, is_vip, vip_until, last_thread_id FROM users WHERE user_id = $1 FOR UPDATE",
                 uid,
@@ -1360,7 +1441,7 @@ async def handle_api_order(request: web.Request) -> web.Response:
             is_vip = bool(row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
             final_cost = 0 if is_vip else max(0, base_price)
             coins = row["coins"] or 0
-            thread_id = row["last_thread_id"] or getattr(cfg, "DEFAULT_THREAD_ID", None)
+            thread_id, booth_name = await _resolve_vip_booth_thread(conn, uid, req_thread_id, row["last_thread_id"])
 
             if coins < final_cost:
                 return web.json_response({
@@ -1378,14 +1459,14 @@ async def handle_api_order(request: web.Request) -> web.Response:
 
     if category in ("drink", "custom_mix", "food"):
         await add_quest_progress(uid, "bar_social", 1)
-        asyncio.create_task(_serve_with_bartender_animation(category, mention, item_name, is_vip, thread_id, uid))
+        asyncio.create_task(_serve_with_bartender_animation(category, mention, item_name, is_vip, thread_id, uid, booth_name))
     elif category == "song":
         await add_quest_progress(uid, "music_vibe", 1)
+        booth_line = f"\n📍 <i>VIP Booth: {html.escape(booth_name)}</i>" if booth_name else ""
         rp_text = (
-            f"🎶 Kaelen memutar piringan hitam di booth DJ — <b>{item_name}</b> mengalun di seluruh ruangan atas permintaan {mention}."
+            f"🎶 Kaelen memutar piringan hitam di booth DJ — <b>{item_name}</b> mengalun di seluruh ruangan atas permintaan {mention}.{booth_line}"
         )
-        media_src, mtype = await _get_custom_service_media("song")
-        await _send_group_media_or_text(kaelen_bot, rp_text, media_src, mtype, thread_id, uid)
+        await _send_group_media_or_text(kaelen_bot, rp_text, None, None, thread_id, uid, auto_delete_sec=45.0)
 
     return web.json_response({"ok": True, "new_coins": new_coins})
 
