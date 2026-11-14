@@ -1,4 +1,5 @@
 import html
+import random
 from datetime import datetime
 from aiogram import Router, F, types
 from aiogram.types import (
@@ -9,7 +10,7 @@ from aiogram.types import (
 
 import shared.database as db
 from hans_concierge.helpers import (
-    bot, REQUIRED_CN_SYMBOL, get_or_create_referral_code, styled_btn
+    bot, get_or_create_referral_code, styled_btn
 )
 
 router = Router()
@@ -68,7 +69,7 @@ async def handle_hans_inline(inline_query: types.InlineQuery):
         duel_msg = (
             f"🎲 <b>TANTANGAN DUEL MEJA BAR — THE VELVET HOUR</b>\n\n"
             f"<b>{html.escape(user.first_name)}</b> membuka tantangan duel taruhan <b>{bet} VC</b>!\n"
-            f"<i>Klik tombol di bawah untuk menerima tantangan (wajib berada di dalam grup bar):</i>"
+            f"<i>Klik tombol di bawah untuk menerima tantangan:</i>"
         )
         results.append(
             InlineQueryResultArticle(
@@ -121,7 +122,6 @@ async def handle_hans_inline(inline_query: types.InlineQuery):
     await inline_query.answer(results, cache_time=5, is_personal=True)
 
 
-# Handler saat orang lain menekan tombol "Terima Duel" dari pesan Inline
 @router.callback_query(F.data.startswith("inlineduel_"))
 async def cb_accept_inline_duel(call: types.CallbackQuery):
     _, challenger_str, bet_str = call.data.split("_")
@@ -132,7 +132,6 @@ async def cb_accept_inline_duel(call: types.CallbackQuery):
     if acceptor.id == challenger_id:
         return await call.answer("Kamu tidak bisa menerima tantanganmu sendiri!", show_alert=True)
 
-    import random
     async with db.pool.acquire() as conn:
         async with conn.transaction():
             c_user = await conn.fetchrow("SELECT user_id, full_name, coins FROM users WHERE user_id = $1 FOR UPDATE", challenger_id)
