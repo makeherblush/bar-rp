@@ -71,7 +71,7 @@ GIFTS_CATALOG = {
         "charm": 6,
         "special": False,
         "default_img": "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=800&q=80",
-        "desc": "Setangkai mawar merah beludru dengan pita sutra hitam.",
+        "desc": "setangkai mawar merah beludru dengan pita sutra hitam",
     },
     "choco": {
         "name": "Artisan Dark Truffles",
@@ -80,7 +80,7 @@ GIFTS_CATALOG = {
         "charm": 10,
         "special": False,
         "default_img": "https://images.unsplash.com/photo-1549007994-cb92caebd54b?w=800&q=80",
-        "desc": "Kotak cokelat hitam Belgia berlapis bubuk kakao emas.",
+        "desc": "sekotak cokelat hitam Belgia berlapis bubuk kakao emas",
     },
     "perfume": {
         "name": "Midnight Oud Elixir",
@@ -89,7 +89,7 @@ GIFTS_CATALOG = {
         "charm": 18,
         "special": False,
         "default_img": "https://images.unsplash.com/photo-1594035910387-fea47794261f?w=800&q=80",
-        "desc": "Parfum kristal beraroma kayu gaharu dan amber malam.",
+        "desc": "parfum kristal beraroma kayu gaharu dan amber malam",
     },
     "bouquet": {
         "name": "Crimson Midnight Bouquet",
@@ -98,7 +98,7 @@ GIFTS_CATALOG = {
         "charm": 28,
         "special": False,
         "default_img": "https://images.unsplash.com/photo-1561181286-d3fee7d55364?w=800&q=80",
-        "desc": "Buket besar berisi 24 mawar merah gelap eksklusif.",
+        "desc": "buket besar berisi 24 mawar merah gelap eksklusif",
     },
     "watch": {
         "name": "Chronograph Gold Watch",
@@ -107,7 +107,7 @@ GIFTS_CATALOG = {
         "charm": 60,
         "special": False,
         "default_img": "https://images.unsplash.com/photo-1523170335258-f5ed11844a49?w=800&q=80",
-        "desc": "Jam tangan mekanik emas klasik edisi kolektor.",
+        "desc": "jam tangan mekanik emas klasik edisi kolektor",
     },
     "key": {
         "name": "VIP Penthouse Suite Key",
@@ -116,7 +116,7 @@ GIFTS_CATALOG = {
         "charm": 100,
         "special": False,
         "default_img": "https://images.unsplash.com/photo-1582139329536-e7284fece509?w=800&q=80",
-        "desc": "Kunci emas akses suite pribadi di lantai teratas lounge.",
+        "desc": "kunci emas akses suite pribadi di lantai teratas lounge",
     },
     "champagne": {
         "name": "Imperial Champagne Tower",
@@ -125,7 +125,7 @@ GIFTS_CATALOG = {
         "charm": 155,
         "special": False,
         "default_img": "https://images.unsplash.com/photo-1514362545857-3bc16c4c7d1b?w=800&q=80",
-        "desc": "Menara gelas kristal dengan tuangan sampanye vintage.",
+        "desc": "menara gelas kristal dengan tuangan sampanye vintage",
     },
     "ring": {
         "name": "Velvet Crimson Diamond Ring",
@@ -134,7 +134,7 @@ GIFTS_CATALOG = {
         "charm": 270,
         "special": True,
         "default_img": "https://images.unsplash.com/photo-1605100804763-247f67b3557e?w=800&q=80",
-        "desc": "Cincin berlian potongan solitaire dengan kilau rubi langka.",
+        "desc": "cincin berlian potongan solitaire dengan kilau rubi langka",
     },
     "necklace": {
         "name": "Starlight Sapphire Necklace",
@@ -143,7 +143,7 @@ GIFTS_CATALOG = {
         "charm": 500,
         "special": True,
         "default_img": "https://images.unsplash.com/photo-1599643478518-a784e5dc4c8f?w=800&q=80",
-        "desc": "Kalung safir biru kerajaan yang dirangkai dengan emas putih.",
+        "desc": "kalung safir biru kerajaan yang dirangkai dengan emas putih",
     },
     "crown": {
         "name": "Sovereign Velvet Crown",
@@ -152,7 +152,7 @@ GIFTS_CATALOG = {
         "charm": 900,
         "special": True,
         "default_img": "https://images.unsplash.com/photo-1589656966895-2f33e7653819?w=800&q=80",
-        "desc": "Mahkota kehormatan tertinggi bagi bintang utama The Velvet Hour.",
+        "desc": "mahkota kehormatan tertinggi bagi bintang utama The Velvet Hour",
     },
 }
 
@@ -359,14 +359,14 @@ async def cmd_set_menu_media(message: types.Message):
     parts = (message.text or "").split()
     if len(parts) < 2 or parts[1].lower() not in valid:
         return await message.reply(
-            "Reply GIF atau Foto dengan perintah:\n<code>/setmenumedia <kategori></code>\n\n"
-            "Kategori tersedia: <code>drink</code>, <code>custom_mix</code>, <code>food</code>, <code>song</code>",
+            "Reply GIF atau Foto dengan:\n<code>/setmenumedia <kategori></code>\n\n"
+            "Kategori: <code>drink</code>, <code>custom_mix</code>, <code>food</code>, <code>song</code>",
             parse_mode=ParseMode.HTML,
         )
 
     rep = message.reply_to_message
     if not rep or (not rep.photo and not rep.animation):
-        return await message.reply("⚠️ Harap <b>reply</b> pesan berisi GIF atau Foto.", parse_mode=ParseMode.HTML)
+        return await message.reply("Harap <b>reply</b> pesan berisi GIF atau Foto.", parse_mode=ParseMode.HTML)
 
     cat = parts[1].lower()
     if rep.animation:
@@ -381,7 +381,7 @@ async def cmd_set_menu_media(message: types.Message):
             ON CONFLICT (gift_code) DO UPDATE SET file_id = EXCLUDED.file_id, media_type = EXCLUDED.media_type;
         """, f"menu_{cat}", file_id, mtype)
 
-    await message.reply(f"✅ Animasi/gambar layanan <code>{cat}</code> berhasil diperbarui!", parse_mode=ParseMode.HTML)
+    await message.reply(f"✅ Media <code>{cat}</code> diperbarui.", parse_mode=ParseMode.HTML)
 
 
 @dp.message(Command("setgiftimg"))
@@ -392,13 +392,13 @@ async def cmd_set_gift_image(message: types.Message):
     if len(parts) < 2 or parts[1].lower() not in GIFTS_CATALOG:
         codes = ", ".join(f"<code>{k}</code>" for k in GIFTS_CATALOG.keys())
         return await message.reply(
-            f"Reply foto atau GIF dengan perintah:\n<code>/setgiftimg <kode></code>\n\nKode tersedia: {codes}",
+            f"Reply foto atau GIF dengan:\n<code>/setgiftimg <kode></code>\n\nKode: {codes}",
             parse_mode=ParseMode.HTML,
         )
 
     rep = message.reply_to_message
     if not rep or (not rep.photo and not rep.animation):
-        return await message.reply("⚠️ Harap <b>reply</b> pesan berisi Foto atau GIF.", parse_mode=ParseMode.HTML)
+        return await message.reply("Harap <b>reply</b> pesan berisi Foto atau GIF.", parse_mode=ParseMode.HTML)
 
     code = parts[1].lower()
     if rep.animation:
@@ -414,7 +414,7 @@ async def cmd_set_gift_image(message: types.Message):
         """, code, file_id, mtype)
 
     await message.reply(
-        f"✅ Media hadiah <b>{GIFTS_CATALOG[code]['name']}</b> (<code>{code}</code>) berhasil diperbarui!",
+        f"✅ Media hadiah <b>{GIFTS_CATALOG[code]['name']}</b> (<code>{code}</code>) diperbarui.",
         parse_mode=ParseMode.HTML,
     )
 
@@ -427,15 +427,14 @@ async def cmd_set_gift_channel(message: types.Message):
     if len(parts) < 2:
         cur = await _get_setting("gift_channel_id") or getattr(cfg, "GIFT_CHANNEL_ID", "Belum diatur")
         return await message.reply(
-            f"Format: <code>/setgiftch -1001234567890</code> (atau <code>off</code> untuk mematikan).\n"
-            f"Channel saat ini: <code>{cur}</code>\n<i>Pastikan bot Julian sudah menjadi Admin di channel tersebut.</i>",
+            f"Format: <code>/setgiftch -1001234567890</code> (atau <code>off</code>).\nChannel saat ini: <code>{cur}</code>",
             parse_mode=ParseMode.HTML,
         )
 
     val = parts[1].strip()
     if val.lower() == "off":
         await _set_setting("gift_channel_id", "")
-        return await message.reply("✅ Pengiriman hadiah istimewa ke channel dimatikan.")
+        return await message.reply("✅ Channel hadiah istimewa dimatikan.")
 
     await _set_setting("gift_channel_id", val)
     await message.reply(f"✅ Channel hadiah istimewa diatur ke: <code>{html.escape(val)}</code>", parse_mode=ParseMode.HTML)
@@ -452,22 +451,18 @@ async def cmd_send_gift(message: types.Message):
         reg_lines = []
         sp_lines = []
         for code, g in GIFTS_CATALOG.items():
-            line = f"• <code>{code}</code> — {g['emoji']} <b>{g['name']}</b> (<b>{g['price']} VC</b> | +{g['charm']} ✨)"
+            line = f"• <code>{code}</code> — {g['emoji']} {g['name']} ({g['price']} VC | +{g['charm']} ✨)"
             if g["special"]:
                 sp_lines.append(line)
             else:
                 reg_lines.append(line)
 
         catalog_text = (
-            "🎁 <b>VELVET LUXURY GIFT BOUTIQUE</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "<b>Koleksi Reguler & Premium</b> <i>(Auto-hapus 45 dtk)</i>:\n"
+            "🎁 <b>Katalog Hadiah The Velvet Hour</b>\n\n"
             + "\n".join(reg_lines)
-            + "\n\n👑 <b>Koleksi Istimewa</b> <i>(Auto-Pin Grup & Hall of Fame Channel)</i>:\n"
+            + "\n\n👑 <b>Hadiah Istimewa</b> <i>(Auto-Pin & Channel)</i>\n"
             + "\n".join(sp_lines)
-            + "\n\n📌 <b>Cara Kirim:</b>\n"
-            "• <code>/gift @username kode</code> (contoh: <code>/gift @user rose</code>)\n"
-            "• Atau <b>reply</b> chat target dengan <code>/gift ring</code>"
+            + "\n\nCara kirim: <code>/gift @username kode</code> atau reply pesan target dengan <code>/gift kode</code>"
         )
         cat_msg = await message.reply(catalog_text, parse_mode=ParseMode.HTML)
         await _schedule_delete(message.chat.id, [message.message_id, cat_msg.message_id], delay=45)
@@ -484,7 +479,7 @@ async def cmd_send_gift(message: types.Message):
 
     if gift_code not in GIFTS_CATALOG:
         err_msg = await message.reply(
-            f"⚠️ Kode hadiah <code>{html.escape(gift_code)}</code> tidak ditemukan. Ketik <code>/gift</code> untuk melihat daftar kode.",
+            f"Kode hadiah <code>{html.escape(gift_code)}</code> tidak ditemukan. Ketik <code>/gift</code> untuk melihat daftar kode.",
             parse_mode=ParseMode.HTML,
         )
         await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=15)
@@ -501,7 +496,7 @@ async def cmd_send_gift(message: types.Message):
             target = await _resolve_target_smart(conn, message, target_ident)
             if not target:
                 err_msg = await message.reply(
-                    "⚠️ Penerima hadiah belum tercatat. <b>Reply</b> salah satu pesan dia dengan <code>/gift " + gift_code + "</code>.",
+                    f"Penerima belum tercatat. Reply salah satu pesannya dengan <code>/gift {gift_code}</code>.",
                     parse_mode=ParseMode.HTML,
                 )
                 await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
@@ -515,7 +510,7 @@ async def cmd_send_gift(message: types.Message):
             s_row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", sender.id)
             if not s_row or (s_row["coins"] or 0) < cost:
                 err_msg = await message.reply(
-                    f"💸 Saldo tidak cukup untuk <b>{gift['name']}</b> (butuh <b>{cost} VC</b>, saldo kamu: <b>{(s_row['coins'] or 0) if s_row else 0} VC</b>).",
+                    f"Saldo tidak cukup untuk <b>{gift['name']}</b> (butuh <b>{cost} VC</b>, saldo kamu: <b>{(s_row['coins'] or 0) if s_row else 0} VC</b>).",
                     parse_mode=ParseMode.HTML,
                 )
                 await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
@@ -536,25 +531,19 @@ async def cmd_send_gift(message: types.Message):
 
     await react_msg(message.chat.id, message.message_id, gift["emoji"])
 
-    tier_badge = "👑 <b>ROYAL SPECIAL GIFT  •  THE VELVET HOUR</b>" if is_special else "🎁 <b>LUXURY GIFT DELIVERY  •  THE VELVET HOUR</b>"
-    note_block = f"\n💌 <i>\"{html.escape(custom_note)}\"</i>" if custom_note else ""
-    footer_note = (
-        "\n\n📌 <i>Hadiah istimewa ini diabadikan di pin grup & Hall of Fame.</i>"
-        if is_special
-        else "\n\n⏳ <i>Pesan ini akan otomatis dibersihkan dalam 45 detik.</i>"
-    )
-
-    caption = (
-        f"{tier_badge}\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"{gift['emoji']} <b>{gift['name']}</b>\n"
-        f"<i>{gift['desc']}</i>\n\n"
-        f"<blockquote>• <b>Dari:</b> {_mention(sender.id, sender.first_name)}\n"
-        f"• <b>Untuk:</b> {_mention(target['user_id'], target['full_name'])}\n"
-        f"• <b>Pesona Penerima:</b> <b>+{charm_gain} Charm ✨</b></blockquote>"
-        f"{note_block}"
-        f"{footer_note}"
-    )
+    note_line = f"\n\n<i>\"{html.escape(custom_note)}\"</i>" if custom_note else ""
+    if is_special:
+        caption = (
+            f"👑 {gift['emoji']} <b>{gift['name']}</b>\n"
+            f"{_mention(sender.id, sender.first_name)} mempersembahkan {gift['desc']} kepada {_mention(target['user_id'], target['full_name'])} (<b>+{charm_gain} Charm ✨</b>)."
+            f"{note_line}"
+        )
+    else:
+        caption = (
+            f"{gift['emoji']} <b>{gift['name']}</b>\n"
+            f"{_mention(sender.id, sender.first_name)} mengirimkan {gift['desc']} untuk {_mention(target['user_id'], target['full_name'])} (<b>+{charm_gain} Charm ✨</b>)."
+            f"{note_line}"
+        )
 
     send_kwargs = {"message_thread_id": message.message_thread_id} if message.message_thread_id else {}
     sent_msg = None
@@ -599,13 +588,9 @@ async def cmd_send_gift(message: types.Message):
         ch_id_raw = await _get_setting("gift_channel_id") or getattr(cfg, "GIFT_CHANNEL_ID", None)
         if ch_id_raw:
             ch_caption = (
-                f"👑 <b>VELVET HALL OF FAME  •  SPECIAL TRIBUTE</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"{gift['emoji']} <b>{gift['name']}</b> (<b>{cost} VC</b>)\n\n"
-                f"<blockquote>• <b>Pengirim:</b> {_mention(sender.id, sender.first_name)}\n"
-                f"• <b>Penerima:</b> {_mention(target['user_id'], target['full_name'])}\n"
-                f"• <b>Bonus Charm:</b> <b>+{charm_gain} ✨</b></blockquote>"
-                f"{note_block}"
+                f"👑 {gift['emoji']} <b>{gift['name']}</b>\n"
+                f"{_mention(sender.id, sender.first_name)} → {_mention(target['user_id'], target['full_name'])} (<b>+{charm_gain} Charm ✨</b>)"
+                f"{note_line}"
             )
             try:
                 ch_target = int(ch_id_raw) if str(ch_id_raw).lstrip("-").isdigit() else str(ch_id_raw)
@@ -630,10 +615,8 @@ async def cmd_menu_miniapp(message: types.Message):
         await _sync_tg_user(conn, message.from_user, message.message_thread_id)
     await react_msg(message.chat.id, message.message_id, "🥂")
     msg = await message.reply(
-        "🥂 <b>THE VELVET HOUR  •  LOUNGE TABLET</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "<i>Julian meletakkan tablet menu beludru di atas meja bar.</i>\n"
-        "Pilih minuman, racik koktail sendiri, hidangan dapur, atau lagu jukebox melalui tombol di bawah:",
+        "🥂 <i>Julian meletakkan tablet menu beludru di atas meja bar.</i>\n"
+        "Silakan pilih minuman, racik koktail, hidangan, atau lagu jukebox:",
         parse_mode=ParseMode.HTML,
         reply_markup=miniapp_menu_kb(),
     )
@@ -650,10 +633,7 @@ async def cmd_order_drink(message: types.Message):
     if len(parts) < 2 or not parts[1].strip():
         await react_msg(message.chat.id, message.message_id, "🍸")
         msg = await message.reply(
-            "🍸 <b>THE VELVET HOUR  •  DRINKS MENU</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "<i>Julian menyodorkan kartu menu digital ke hadapanmu.</i>\n"
-            "Silakan pilih minuman atau racik koktail sendiri lewat Mini App di bawah ini:",
+            "🍸 <i>Julian menyodorkan kartu menu ke hadapanmu.</i>",
             parse_mode=ParseMode.HTML,
             reply_markup=miniapp_menu_kb(),
         )
@@ -677,7 +657,7 @@ async def cmd_order_drink(message: types.Message):
 
             if coins < cost:
                 return await message.reply(
-                    f"💸 Saldo VC tidak cukup untuk memesan <b>{item_name}</b> (butuh <b>{cost} VC</b>, saldo kamu: <b>{coins} VC</b>).",
+                    f"Saldo VC tidak cukup untuk memesan <b>{item_name}</b> (butuh <b>{cost} VC</b>, saldo kamu: <b>{coins} VC</b>).",
                     parse_mode=ParseMode.HTML,
                 )
 
@@ -703,15 +683,10 @@ async def cmd_order_drink(message: types.Message):
     except Exception:
         pass
 
-    vip_badge = "  •  👑 <b>VIP RESERVE</b>" if (is_vip_item or is_vip) else ""
+    vip_tag = " 👑" if (is_vip_item or is_vip) else ""
     caption = (
-        f"🍸 <b>BARTENDER SERVICE  •  JULIAN</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>Julian menggeser gelas kristal di atas meja bar mahoni menuju meja tamu.</i>\n\n"
-        f"<blockquote>• <b>Tamu:</b> {_mention(user.id, user.first_name)}{vip_badge}\n"
-        f"• <b>Pesanan:</b> <b>{item_name}</b>\n"
-        f"• <b>Kategori:</b> Bar & Cellar Selection</blockquote>\n\n"
-        f"🥂 <i>\"Silakan dinikmati malam ini.\"</i>"
+        f"🍸 Julian menggeser segelas <b>{item_name}</b> di atas meja bar mahoni menuju {_mention(user.id, user.first_name)}{vip_tag}.\n\n"
+        f"<i>\"Silakan dinikmati malam ini.\"</i>"
     )
     media_src, mtype = await _get_service_media("drink")
     try:
@@ -733,10 +708,7 @@ async def cmd_eat_food(message: types.Message):
     if len(parts) < 2 or not parts[1].strip():
         await react_msg(message.chat.id, message.message_id, "🍽️")
         msg = await message.reply(
-            "🍽️ <b>THE VELVET HOUR  •  MIDNIGHT KITCHEN</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "<i>Julian membukakan daftar hidangan dapur malam ini.</i>\n"
-            "Silakan pilih menu makanan langsung lewat Mini App di bawah ini:",
+            "🍽️ <i>Julian membukakan daftar hidangan dapur malam ini.</i>",
             parse_mode=ParseMode.HTML,
             reply_markup=miniapp_menu_kb(),
         )
@@ -760,7 +732,7 @@ async def cmd_eat_food(message: types.Message):
 
             if coins < cost:
                 return await message.reply(
-                    f"💸 Saldo VC tidak cukup untuk memesan <b>{item_name}</b> (butuh <b>{cost} VC</b>).",
+                    f"Saldo VC tidak cukup untuk memesan <b>{item_name}</b> (butuh <b>{cost} VC</b>).",
                     parse_mode=ParseMode.HTML,
                 )
 
@@ -786,15 +758,10 @@ async def cmd_eat_food(message: types.Message):
     except Exception:
         pass
 
-    vip_badge = "  •  👑 <b>VIP GASTRONOMY</b>" if (is_vip_item or is_vip) else ""
+    vip_tag = " 👑" if (is_vip_item or is_vip) else ""
     caption = (
-        f"🍽️ <b>MIDNIGHT KITCHEN  •  JULIAN</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>Hidangan hangat baru saja keluar dari dapur dan disajikan ke meja tamu.</i>\n\n"
-        f"<blockquote>• <b>Tamu:</b> {_mention(user.id, user.first_name)}{vip_badge}\n"
-        f"• <b>Hidangan:</b> <b>{item_name}</b>\n"
-        f"• <b>Kategori:</b> Lounge Gastronomy</blockquote>\n\n"
-        f"✨ <i>\"Selamat menikmati santapan malam Anda.\"</i>"
+        f"🍽️ Hidangan hangat <b>{item_name}</b> baru saja keluar dari dapur dan disajikan ke meja {_mention(user.id, user.first_name)}{vip_tag}.\n\n"
+        f"<i>\"Selamat menikmati santapan malam Anda.\"</i>"
     )
     media_src, mtype = await _get_service_media("food")
     try:
@@ -815,7 +782,7 @@ async def cmd_treat_guest(message: types.Message):
 
     if len(parts) < 2 and not has_reply:
         return await message.reply(
-            "Format: <code>/treat @username [nama menu]</code> atau <b>reply</b> pesan temanmu dengan <code>/treat [nama menu]</code> (Biaya: 20 VC, +5 Charm).",
+            "Format: <code>/treat @username [nama menu]</code> atau reply pesan temanmu dengan <code>/treat [nama menu]</code> (20 VC, +5 Charm).",
             parse_mode=ParseMode.HTML,
         )
 
@@ -831,8 +798,7 @@ async def cmd_treat_guest(message: types.Message):
             target = await _resolve_target_smart(conn, message, target_ident)
             if not target:
                 return await message.reply(
-                    "⚠️ Tamu tujuan belum tercatat di database bar.\n"
-                    "<i>Tips: Reply langsung salah satu chat dia dengan</i> <code>/treat</code><i>, atau minta dia kirim 1 chat di grup ini terlebih dahulu.</i>",
+                    "Tamu tujuan belum tercatat. Reply langsung salah satu chat dia dengan <code>/treat</code>.",
                     parse_mode=ParseMode.HTML,
                 )
             if target["user_id"] == sender.id:
@@ -840,7 +806,7 @@ async def cmd_treat_guest(message: types.Message):
 
             s_row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", sender.id)
             if not s_row or (s_row["coins"] or 0) < 20:
-                return await message.reply("💸 Saldo kamu kurang dari <b>20 VC</b> untuk mentraktir tamu.", parse_mode=ParseMode.HTML)
+                return await message.reply("Saldo kamu kurang dari <b>20 VC</b> untuk mentraktir tamu.", parse_mode=ParseMode.HTML)
 
             await conn.execute("UPDATE users SET coins = coins - 20 WHERE user_id = $1", sender.id)
             await conn.execute("UPDATE users SET charm_points = COALESCE(charm_points, 0) + 5 WHERE user_id = $1", target["user_id"])
@@ -849,10 +815,7 @@ async def cmd_treat_guest(message: types.Message):
 
     await react_msg(message.chat.id, message.message_id, "🥂")
     await message.reply(
-        f"🥂 <b>COMPLIMENTARY TREAT</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"{_mention(sender.id, sender.first_name)} mengirimkan <b>{menu_text}</b> untuk {_mention(target['user_id'], target['full_name'])}!\n"
-        f"✨ <i>Pesona {_mention(target['user_id'], target['full_name'])} bertambah <b>+5 Charm</b>.</i>",
+        f"🥂 {_mention(sender.id, sender.first_name)} mentraktir <b>{menu_text}</b> untuk {_mention(target['user_id'], target['full_name'])} (<b>+5 Charm ✨</b>).",
         parse_mode=ParseMode.HTML,
     )
 
@@ -876,10 +839,7 @@ async def cmd_vip_booth(message: types.Message):
 
     await react_msg(message.chat.id, message.message_id, "👑")
     await message.reply(
-        f"🍾 <b>VIP BOOTH RESERVED</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>Julian memasang papan nama emas di area balkon eksklusif untuk {_mention(user.id, user.first_name)}:</i>\n"
-        f"• <b>Nama Booth:</b> <b>{html.escape(booth_name)}</b>",
+        f"🍾 Julian memasang papan nama emas <b>{html.escape(booth_name)}</b> di area balkon VIP untuk {_mention(user.id, user.first_name)}.",
         parse_mode=ParseMode.HTML,
     )
 
@@ -894,7 +854,7 @@ async def cmd_mystery_box(message: types.Message):
             await _sync_tg_user(conn, user, message.message_thread_id)
             row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", user.id)
             if not row or (row["coins"] or 0) < cost:
-                return await message.reply("💸 Butuh <b>40 VC</b> untuk membuka Velvet Mystery Box.", parse_mode=ParseMode.HTML)
+                return await message.reply("Butuh <b>40 VC</b> untuk membuka Velvet Mystery Box.", parse_mode=ParseMode.HTML)
 
             roll = random.randint(1, 100)
             if roll <= 35:
@@ -915,10 +875,7 @@ async def cmd_mystery_box(message: types.Message):
 
     await react_msg(message.chat.id, message.message_id, "🎁")
     await message.reply(
-        f"🎁 <b>VELVET MYSTERY BOX</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"{_mention(user.id, user.first_name)} membuka kotak beludru hitam seharga <b>40 VC</b>...\n"
-        f"✨ <b>Isi Kotak:</b> <b>{label}</b>!",
+        f"🎁 {_mention(user.id, user.first_name)} membuka kotak beludru hitam dan mendapatkan <b>{label}</b>!",
         parse_mode=ParseMode.HTML,
     )
 
@@ -937,7 +894,7 @@ async def cmd_slot_machine(message: types.Message):
             await _sync_tg_user(conn, user, message.message_thread_id)
             row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", user.id)
             if not row or (row["coins"] or 0) < bet:
-                return await message.reply(f"💸 Saldo kamu kurang dari <b>{bet} VC</b> untuk memutar mesin slot.", parse_mode=ParseMode.HTML)
+                return await message.reply(f"Saldo kamu kurang dari <b>{bet} VC</b> untuk memutar mesin slot.", parse_mode=ParseMode.HTML)
             await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", bet, user.id)
 
     dice_msg = await message.reply_dice(emoji="🎰")
@@ -964,7 +921,7 @@ async def cmd_slot_machine(message: types.Message):
         else:
             await _log_tx(conn, user.id, -bet, "Taruhan Slot Machine")
 
-    await dice_msg.reply(f"🎰 <b>VELVET SLOT MACHINE</b>\n\n{outcome}", parse_mode=ParseMode.HTML)
+    await dice_msg.reply(outcome, parse_mode=ParseMode.HTML)
 
 
 # --- NATIVE TELEGRAM DART DUEL (/dart @username [taruhan] atau reply pesan target) ---
@@ -974,7 +931,7 @@ async def cmd_dart_challenge(message: types.Message):
     has_reply = bool(message.reply_to_message and message.reply_to_message.from_user)
 
     if len(parts) < 2 and not has_reply:
-        return await message.reply("Format: <code>/dart @username [taruhan 10-100]</code> atau <b>reply</b> pesan lawanmu.", parse_mode=ParseMode.HTML)
+        return await message.reply("Format: <code>/dart @username [taruhan 10-100]</code> atau reply pesan lawanmu.", parse_mode=ParseMode.HTML)
 
     if has_reply:
         bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 20
@@ -992,8 +949,7 @@ async def cmd_dart_challenge(message: types.Message):
         target = await _resolve_target_smart(conn, message, target_ident)
         if not target or target["user_id"] == challenger.id:
             return await message.reply(
-                "⚠️ Lawan dart tidak ditemukan.\n"
-                "<i>Tips: Reply langsung pesan lawanmu dengan</i> <code>/dart 20</code> <i>agar otomatis terdeteksi!</i>",
+                "Lawan dart tidak ditemukan. Reply langsung pesan lawanmu dengan <code>/dart 20</code>.",
                 parse_mode=ParseMode.HTML,
             )
 
@@ -1007,9 +963,7 @@ async def cmd_dart_challenge(message: types.Message):
         styled_btn("❌ Tolak", callback_data=f"canceldart_{target['user_id']}", style="danger"),
     ]])
     await message.reply(
-        f"🎯 <b>TANTANGAN DART LOUNGE</b>\n\n"
-        f"{_mention(challenger.id, challenger.first_name)} menantang {_mention(target['user_id'], target['full_name'])}!\n"
-        f"• <b>Taruhan:</b> <b>{bet} VC</b> (Skor 6 = Bullseye 🎯)",
+        f"🎯 {_mention(challenger.id, challenger.first_name)} menantang {_mention(target['user_id'], target['full_name'])} duel dart (<b>{bet} VC</b>).",
         parse_mode=ParseMode.HTML,
         reply_markup=kb,
     )
@@ -1024,7 +978,7 @@ async def cb_play_dart(call: types.CallbackQuery):
         return await call.answer("Hanya pemain yang ditantang yang bisa memulai lemparan!", show_alert=True)
 
     await call.answer("Melempar anak panah...")
-    await call.message.edit_text("🎯 <b>Pertandingan Dart Dimulai!</b> Kedua pemain bersiap melempar ke papan target...", parse_mode=ParseMode.HTML)
+    await call.message.edit_text("🎯 Pertandingan dart dimulai...", parse_mode=ParseMode.HTML)
 
     d1_msg = await call.message.answer_dice(emoji="🎯")
     await asyncio.sleep(1.5)
@@ -1039,11 +993,11 @@ async def cb_play_dart(call: types.CallbackQuery):
             t_user = await conn.fetchrow("SELECT user_id, full_name, coins FROM users WHERE user_id = $1 FOR UPDATE", t_id)
 
             if (c_user["coins"] or 0) < bet or (t_user["coins"] or 0) < bet:
-                return await d2_msg.reply("⚠️ Pertandingan dibatalkan karena saldo salah satu pemain berubah.")
+                return await d2_msg.reply("Pertandingan dibatalkan karena saldo salah satu pemain berubah.")
 
             if s1 == s2:
                 return await d2_msg.reply(
-                    f"🎯 <b>SERI!</b> Kedua pemain mencetak skor <b>{s1}/6</b>. Taruhan <b>{bet} VC</b> dikembalikan utuh.",
+                    f"🎯 Seri! Kedua pemain mencetak skor <b>{s1}/6</b>. Taruhan <b>{bet} VC</b> dikembalikan.",
                     parse_mode=ParseMode.HTML,
                 )
 
@@ -1057,10 +1011,10 @@ async def cb_play_dart(call: types.CallbackQuery):
 
     bullseye_note = " 🔥 <b>BULLSEYE!</b>" if max(s1, s2) == 6 else ""
     await d2_msg.reply(
-        f"🎯 <b>HASIL PERTANDINGAN DART</b>{bullseye_note}\n\n"
+        f"🎯 <b>Hasil Dart</b>{bullseye_note}\n"
         f"• {_mention(c_user['user_id'], c_user['full_name'])}: <b>{s1}/6</b>\n"
-        f"• {_mention(t_user['user_id'], t_user['full_name'])}: <b>{s2}/6</b>\n\n"
-        f"🏆 <b>Pemenang:</b> {_mention(winner['user_id'], winner['full_name'])} meraih <b>+{bet} VC</b>!",
+        f"• {_mention(t_user['user_id'], t_user['full_name'])}: <b>{s2}/6</b>\n"
+        f"🏆 Pemenang: {_mention(winner['user_id'], winner['full_name'])} (<b>+{bet} VC</b>)",
         parse_mode=ParseMode.HTML,
     )
 
@@ -1081,7 +1035,7 @@ async def cmd_dice_duel(message: types.Message):
     has_reply = bool(message.reply_to_message and message.reply_to_message.from_user)
 
     if len(parts) < 2 and not has_reply:
-        return await message.reply("Format: <code>/dice @username [taruhan 10-100]</code> atau <b>reply</b> pesan lawanmu.", parse_mode=ParseMode.HTML)
+        return await message.reply("Format: <code>/dice @username [taruhan 10-100]</code> atau reply pesan lawanmu.", parse_mode=ParseMode.HTML)
 
     if has_reply:
         bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 20
@@ -1099,15 +1053,14 @@ async def cmd_dice_duel(message: types.Message):
         target = await _resolve_target_smart(conn, message, target_ident)
         if not target or target["user_id"] == challenger.id:
             return await message.reply(
-                "⚠️ Lawan duel tidak ditemukan.\n"
-                "<i>Tips: Reply langsung pesan lawanmu dengan</i> <code>/dice 20</code> <i>agar otomatis terdeteksi!</i>",
+                "Lawan duel tidak ditemukan. Reply langsung pesan lawanmu dengan <code>/dice 20</code>.",
                 parse_mode=ParseMode.HTML,
             )
 
         c_coins = await conn.fetchval("SELECT coins FROM users WHERE user_id = $1", challenger.id) or 0
         t_coins = target["coins"] or 0
         if c_coins < bet or t_coins < bet:
-            return await message.reply("Saldo VC salah satu pemain tidak mencukupi untuk taruhan tersebut.")
+            return await message.reply("Saldo VC salah satu pemain tidak mencukupi.")
 
         duel_id = await conn.fetchval("""
             INSERT INTO duel_challenges (challenger_id, target_id, bet_vc)
@@ -1120,9 +1073,7 @@ async def cmd_dice_duel(message: types.Message):
         styled_btn("❌ Tolak", callback_data=f"decline_duel_{duel_id}", style="danger"),
     ]])
     await message.reply(
-        f"🎲 <b>TANTANGAN DUEL DADU MEJA BAR</b>\n\n"
-        f"{_mention(challenger.id, challenger.first_name)} menantang {_mention(target['user_id'], target['full_name'])}!\n"
-        f"• <b>Taruhan:</b> <b>{bet} VC</b>",
+        f"🎲 {_mention(challenger.id, challenger.first_name)} menantang {_mention(target['user_id'], target['full_name'])} duel dadu (<b>{bet} VC</b>).",
         parse_mode=ParseMode.HTML,
         reply_markup=kb,
     )
@@ -1134,13 +1085,13 @@ async def cb_accept_duel(call: types.CallbackQuery):
     async with db.pool.acquire() as conn:
         duel = await conn.fetchrow("SELECT * FROM duel_challenges WHERE id = $1", duel_id)
         if not duel:
-            return await call.answer("Tantangan duel sudah kedaluwarsa atau selesai.", show_alert=True)
+            return await call.answer("Tantangan duel sudah selesai.", show_alert=True)
         if call.from_user.id != duel["target_id"]:
             return await call.answer("Bukan tantangan untukmu!", show_alert=True)
         await conn.execute("DELETE FROM duel_challenges WHERE id = $1", duel_id)
 
     await call.answer("Melempar dadu...")
-    await call.message.edit_text("🎲 <b>Duel Dadu Dimulai!</b> Julian mengocok dua dadu kristal di atas meja...", parse_mode=ParseMode.HTML)
+    await call.message.edit_text("🎲 Duel dadu dimulai...", parse_mode=ParseMode.HTML)
 
     dice1 = await call.message.answer_dice(emoji="🎲")
     await asyncio.sleep(1.4)
@@ -1156,11 +1107,11 @@ async def cb_accept_duel(call: types.CallbackQuery):
             t_user = await conn.fetchrow("SELECT user_id, full_name, coins FROM users WHERE user_id = $1 FOR UPDATE", duel["target_id"])
 
             if (c_user["coins"] or 0) < bet or (t_user["coins"] or 0) < bet:
-                return await dice2.reply("⚠️ Duel dibatalkan karena saldo salah satu pemain tidak mencukupi.")
+                return await dice2.reply("Duel dibatalkan karena saldo salah satu pemain tidak mencukupi.")
 
             if d1 == d2:
                 return await dice2.reply(
-                    f"🎲 <b>SERI!</b> Kedua pemain melempar angka <b>{d1}</b>. Taruhan <b>{bet} VC</b> dikembalikan utuh.",
+                    f"🎲 Seri! Kedua pemain melempar angka <b>{d1}</b>. Taruhan <b>{bet} VC</b> dikembalikan.",
                     parse_mode=ParseMode.HTML,
                 )
 
@@ -1173,10 +1124,10 @@ async def cb_accept_duel(call: types.CallbackQuery):
             await _log_tx(conn, loser["user_id"], -bet, f"Kalah Duel Dadu vs {winner['full_name']}")
 
     await dice2.reply(
-        f"🎲 <b>HASIL DUEL DADU MEJA BAR</b>\n\n"
+        f"🎲 <b>Hasil Duel Dadu</b>\n"
         f"• {_mention(c_user['user_id'], c_user['full_name'])}: <b>{d1}</b>\n"
-        f"• {_mention(t_user['user_id'], t_user['full_name'])}: <b>{d2}</b>\n\n"
-        f"🏆 <b>Pemenang:</b> {_mention(winner['user_id'], winner['full_name'])} membawa pulang <b>+{bet} VC</b>!",
+        f"• {_mention(t_user['user_id'], t_user['full_name'])}: <b>{d2}</b>\n"
+        f"🏆 Pemenang: {_mention(winner['user_id'], winner['full_name'])} (<b>+{bet} VC</b>)",
         parse_mode=ParseMode.HTML,
     )
 
@@ -1207,17 +1158,16 @@ async def cmd_check_bill(message: types.Message):
         )
 
     if not row:
-        return await message.reply("Silakan kirim 1 pesan di grup terlebih dahulu untuk membuka tab tamu.")
+        return await message.reply("Kirim 1 pesan di grup terlebih dahulu untuk membuka tab tamu.")
 
     is_vip = bool(row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
-    status = f"👑 VIP Reserve (s/d {row['vip_until'].strftime('%d %b %H:%M UTC')})" if is_vip else "🥂 Reguler Guest"
-    booth = f"\n• <b>VIP Booth:</b> {html.escape(row['vip_booth_name'])}" if row["vip_booth_name"] else ""
+    status = f"👑 VIP (s/d {row['vip_until'].strftime('%d %b %H:%M UTC')})" if is_vip else "Reguler"
+    booth = f"\n• VIP Booth: <b>{html.escape(row['vip_booth_name'])}</b>" if row["vip_booth_name"] else ""
     msg = await message.reply(
-        f"🧾 <b>CATATAN TAB  •  {html.escape(user.first_name)}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"<blockquote>• <b>Saldo Dompet:</b> <b>{row['coins'] or 0} VC</b>\n"
-        f"• <b>Charm Points:</b> <b>{row['charm_points'] or 0} ✨</b>\n"
-        f"• <b>Status:</b> {status}{booth}</blockquote>",
+        f"🧾 <b>Tab {html.escape(user.first_name)}</b>\n"
+        f"• Saldo: <b>{row['coins'] or 0} VC</b>\n"
+        f"• Charm: <b>{row['charm_points'] or 0} ✨</b>\n"
+        f"• Status: {status}{booth}",
         parse_mode=ParseMode.HTML,
     )
     await _schedule_delete(message.chat.id, [message.message_id, msg.message_id], delay=45)
@@ -1228,12 +1178,11 @@ async def cmd_top_charm(message: types.Message):
     async with db.pool.acquire() as conn:
         rows = await conn.fetch("SELECT full_name, charm_points FROM users ORDER BY COALESCE(charm_points, 0) DESC LIMIT 10")
     lines = [
-        f"{idx}. <b>{html.escape(r['full_name'])}</b> — <b>{r['charm_points'] or 0} ✨</b>"
+        f"{idx}. {html.escape(r['full_name'])} — <b>{r['charm_points'] or 0} ✨</b>"
         for idx, r in enumerate(rows, start=1)
     ] or ["<i>Belum ada data.</i>"]
     msg = await message.reply(
-        "✨ <b>TOP 10 MOST CHARMING GUESTS  •  THE VELVET HOUR</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n" + "\n".join(lines),
+        "✨ <b>Top 10 Most Charming Guests</b>\n\n" + "\n".join(lines),
         parse_mode=ParseMode.HTML,
     )
     await _schedule_delete(message.chat.id, [message.message_id, msg.message_id], delay=60)
@@ -1245,8 +1194,7 @@ async def cmd_apply_shift(message: types.Message):
     parts = (message.text or "").split()
     if len(parts) < 2 or parts[1].lower() not in SHIFT_ROLES:
         return await message.reply(
-            "💼 <b>LOWONGAN SHIFT BAR (20 Menit — Upah 50 VC)</b>\n"
-            "Pilih posisi: <code>/apply waiter</code>, <code>/apply bartender</code>, atau <code>/apply host</code>",
+            "💼 Pilih shift (20 menit — upah 50 VC): <code>/apply waiter</code>, <code>/apply bartender</code>, atau <code>/apply host</code>",
             parse_mode=ParseMode.HTML,
         )
 
@@ -1283,10 +1231,8 @@ async def cmd_apply_shift(message: types.Message):
 
     await react_msg(message.chat.id, message.message_id, "💼")
     await message.reply(
-        f"💼 <b>SHIFT DIMULAI — {meta['title'].upper()}</b>\n\n"
-        f"{_mention(user.id, user.first_name)} resmi bertugas selama <b>20 menit</b>!\n"
-        f"• <b>Tugas Layanan:</b> {meta['cmds']}\n"
-        f"• <b>Syarat Upah (50 VC):</b> Selesaikan minimal <b>5x layanan</b> lalu ketik <code>/endshift</code>.",
+        f"💼 {_mention(user.id, user.first_name)} mulai bertugas sebagai <b>{meta['title']}</b> (20 menit).\n"
+        f"Tugas: {meta['cmds']} (minimal 5x layanan lalu <code>/endshift</code>).",
         parse_mode=ParseMode.HTML,
     )
 
@@ -1301,7 +1247,7 @@ async def _record_shift_service(message: types.Message, allowed_role: str, actio
         await conn.execute("UPDATE active_shifts SET service_count = $1 WHERE user_id = $2", new_cnt, user.id)
 
     await react_msg(message.chat.id, message.message_id, "✅")
-    await message.reply(f"{action_text}\n<i>(Progres Layanan Shift: <b>{new_cnt}/5</b>)</i>", parse_mode=ParseMode.HTML)
+    await message.reply(f"{action_text} <i>({new_cnt}/5)</i>", parse_mode=ParseMode.HTML)
 
 
 @dp.message(Command("mix"), F.chat.type.in_({"group", "supergroup"}))
@@ -1347,10 +1293,7 @@ async def cmd_my_shift(message: types.Message):
         return await message.reply("Kamu sedang tidak dalam jadwal shift aktif.")
     rem = max(0, int((shift["ends_at"] - datetime.utcnow()).total_seconds() // 60))
     await message.reply(
-        f"📋 <b>STATUS SHIFT — {html.escape(user.first_name)}</b>\n"
-        f"• <b>Posisi:</b> {shift['role_name'].upper()}\n"
-        f"• <b>Layanan Selesai:</b> <b>{shift['service_count']}/5</b>\n"
-        f"• <b>Sisa Waktu:</b> ~{rem} menit",
+        f"📋 Shift <b>{shift['role_name'].upper()}</b> — Layanan: <b>{shift['service_count']}/5</b> (sisa ~{rem} menit)",
         parse_mode=ParseMode.HTML,
     )
 
@@ -1368,7 +1311,7 @@ async def cmd_end_shift(message: types.Message):
 
             if (shift["service_count"] or 0) < 5:
                 return await message.reply(
-                    f"⚠️ Shift diakhiri lebih awal dengan layanan <b>{shift['service_count']}/5</b> (belum memenuhi syarat upah 50 VC).",
+                    f"Shift diakhiri lebih awal dengan layanan <b>{shift['service_count']}/5</b> (belum memenuhi syarat upah 50 VC).",
                     parse_mode=ParseMode.HTML,
                 )
 
@@ -1382,9 +1325,7 @@ async def cmd_end_shift(message: types.Message):
 
     await react_msg(message.chat.id, message.message_id, "💰")
     await message.reply(
-        f"💰 <b>SHIFT SELESAI — UPAH CAIR!</b>\n\n"
-        f"Terima kasih atas kerja kerasmu, {_mention(user.id, user.first_name)}!\n"
-        f"• <b>Upah Diterima:</b> <b>+50 Velvet Coins</b>",
+        f"💰 Shift selesai! {_mention(user.id, user.first_name)} menerima upah <b>+50 Velvet Coins</b>.",
         parse_mode=ParseMode.HTML,
     )
 
