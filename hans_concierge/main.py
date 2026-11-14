@@ -16,8 +16,7 @@ from aiogram.types import (
 from aiogram.enums import ParseMode
 
 import shared.database as db
-import shared.config as cfg
-from shared.config import OWNER_ID
+from shared.config import OWNER_ID, CH_INFO_ID, CH_PROMOTE_ID
 from hans_concierge.helpers import (
     bot,
     ensure_hans_schema,
@@ -45,6 +44,7 @@ dp.include_router(inline_mode_router)
 class AdminActionState(StatesGroup):
     waiting_new_pw = State()
     waiting_channel_id = State()
+    waiting_promote_channel_id = State()
     waiting_givevc = State()
     waiting_addshop = State()
     waiting_delshop = State()
@@ -56,7 +56,7 @@ class AdminActionState(StatesGroup):
 CUSTOM_SLOTS = {
     "ico_enter": "Tombol Masuk Bar",
     "ico_confess": "Tombol Curhat Confess",
-    "ico_pm": "Tombol Kirim PM",
+    "ico_pm": "Tombol Kirim Promote",
     "ico_wallet": "Tombol Kartu Member",
     "ico_daily": "Tombol Absen Harian",
     "ico_vip": "Tombol Beli VIP Pass",
@@ -85,13 +85,8 @@ async def _build_admin_dashboard(user_id: int) -> tuple[str, InlineKeyboardMarku
         if cur_pw
         else "<i>Nonaktif — bebas masuk dengan CN</i>"
     )
-    active_ch = (
-        await get_bar_setting("target_channel_id")
-        or getattr(cfg, "CH_INFO_ID", None)
-        or getattr(cfg, "CH_PROMOTE_ID", None)
-        or "Belum diatur"
-    )
-    promote_ch = getattr(cfg, "CH_PROMOTE_ID", None) or "Belum diatur"
+    info_ch = await get_bar_setting("target_channel_id") or (str(CH_INFO_ID) if CH_INFO_ID else "Belum diatur")
+    promote_ch = await get_bar_setting("promote_channel_id") or (str(CH_PROMOTE_ID) if CH_PROMOTE_ID else "Belum diatur")
 
     async with db.pool.acquire() as conn:
         total_users = await conn.fetchval("SELECT COUNT(*) FROM users") or 0
@@ -102,9 +97,9 @@ async def _build_admin_dashboard(user_id: int) -> tuple[str, InlineKeyboardMarku
     if is_owner:
         text = (
             "👑 <b>PANEL KONTROL UTAMA — OWNER THE VELVET HOUR</b>\n\n"
-            f"📊 <b>Ringkasan Bar:</b> {total_users} Tamu | {total_vip} VIP Aktif | {total_shops} Lapak | {total_posts} Confess & PM\n"
+            f"📊 <b>Ringkasan Bar:</b> {total_users} Tamu | {total_vip} VIP Aktif | {total_shops} Lapak | {total_posts} Confess & Promote\n"
             f"🔐 <b>Password Pintu:</b> {pw_status}\n"
-            f"📢 <b>Channel Confess & PM:</b> <code>{html.escape(str(active_ch))}</code>\n"
+            f"🕯️ <b>Channel Info & Confess:</b> <code>{html.escape(str(info_ch))}</code>\n"
             f"📣 <b>Channel Promote:</b> <code>{html.escape(str(promote_ch))}</code>\n\n"
             "<i>Pilih tombol aksi di bawah ini atau gunakan slash command cepat:</i>"
         )
@@ -114,19 +109,22 @@ async def _build_admin_dashboard(user_id: int) -> tuple[str, InlineKeyboardMarku
                 styled_btn("🔓 Matikan Password", callback_data="adm_delpw", style="danger"),
             ],
             [
-                styled_btn("📢 Atur Channel CH", callback_data="adm_setch"),
+                styled_btn("🕯️ Channel Confess", callback_data="adm_setch"),
+                styled_btn("📣 Channel Promote", callback_data="adm_setpromotech"),
+            ],
+            [
                 styled_btn("💰 Suntik Saldo VC", callback_data="adm_givevc", style="success"),
-            ],
-            [
                 styled_btn("🏪 Tambah Lapak", callback_data="adm_addshop"),
-                styled_btn("🗑️ Hapus Lapak", callback_data="adm_delshop"),
             ],
             [
+                styled_btn("🗑️ Hapus Lapak", callback_data="adm_delshop"),
                 styled_btn("👮 Angkat Admin", callback_data="adm_addadmin"),
+            ],
+            [
                 styled_btn("🚫 Cabut Admin", callback_data="adm_deladmin"),
+                styled_btn("📋 Lapak & Admin", callback_data="adm_list_overview"),
             ],
             [styled_btn("🎨 Kustomisasi Custom Emoji Tombol & Teks", callback_data="adm_customize_ui", style="primary")],
-            [styled_btn("📋 Daftar Lapak & Staf Admin", callback_data="adm_list_overview")],
             [styled_btn("🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
         ]
     else:
@@ -284,7 +282,7 @@ async def cmd_delpw(message: types.Message):
     )
 
 
-async def _apply_and_verify_channel(raw_ch: str) -> str:
+async def _apply_and_verify_channel(raw_ch: str, setting_key: str, label: str) -> str:
     ch_val = raw_ch.strip()
     target = int(ch_val) if ch_val.lstrip("-").isdigit() else ch_val
     try:
@@ -292,28 +290,29 @@ async def _apply_and_verify_channel(raw_ch: str) -> str:
         me = await bot.get_me()
         member = await bot.get_chat_member(target, me.id)
         can_post = getattr(member, "can_post_messages", False) or member.status in ("administrator", "creator")
-        await set_bar_setting("target_channel_id", str(chat.id))
+        await set_bar_setting(setting_key, str(chat.id))
         if can_post:
             return (
-                f"✅ <b>Channel Terhubung & Terverifikasi!</b>\n"
+                f"✅ <b>{label} Terhubung & Terverifikasi!</b>\n"
                 f"• <b>Nama Channel:</b> {html.escape(chat.title or str(chat.id))}\n"
                 f"• <b>ID Channel:</b> <code>{chat.id}</code>\n"
-                f"• <b>Status Bot:</b> Admin siap memposting confess & pm."
+                f"• <b>Status Bot:</b> Admin siap menerbitkan kiriman."
             )
         return (
-            f"⚠️ <b>Channel Tersimpan, Namun Izin Posting Belum Aktif</b>\n"
+            f"⚠️ <b>{label} Tersimpan, Namun Izin Posting Belum Aktif</b>\n"
             f"• <b>Nama Channel:</b> {html.escape(chat.title or str(chat.id))} — <code>{chat.id}</code>\n"
             f"• <b>Tindakan:</b> Jadikan @{me.username} sebagai <b>Admin</b> dengan izin <i>Post Messages</i> di channel tersebut."
         )
     except Exception as e:
-        await set_bar_setting("target_channel_id", ch_val)
+        await set_bar_setting(setting_key, ch_val)
         return (
-            f"⚠️ <b>ID Channel Disimpan:</b> <code>{html.escape(ch_val)}</code> — <b>Gagal Verifikasi Otomatis</b>\n"
+            f"⚠️ <b>ID {label} Disimpan:</b> <code>{html.escape(ch_val)}</code> — <b>Gagal Verifikasi Otomatis</b>\n"
             f"• <b>Alasan:</b> <code>{html.escape(str(e))}</code>\n"
             f"• <i>Pastikan Hans sudah dimasukkan sebagai Admin ke dalam channel tersebut.</i>"
         )
 
 
+# --- PENGATURAN CHANNEL CONFESS (CH_INFO_ID) ---
 @dp.callback_query(F.data == "adm_setch")
 async def cb_adm_setch(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id != OWNER_ID:
@@ -321,31 +320,27 @@ async def cb_adm_setch(call: types.CallbackQuery, state: FSMContext):
     await call.answer()
     await state.set_state(AdminActionState.waiting_channel_id)
 
-    preset_rows = []
-    if getattr(cfg, "CH_INFO_ID", None):
-        preset_rows.append([styled_btn("📢 Pakai CH_INFO (Railway)", callback_data="use_env_ch_info", style="success")])
-    if getattr(cfg, "CH_PROMOTE_ID", None):
-        preset_rows.append([styled_btn("📣 Pakai CH_PROMOTE (Railway)", callback_data="use_env_ch_promote", style="primary")])
-    preset_rows.append([styled_btn("❌ Batal", callback_data="open_admin_panel", style="danger")])
+    rows = []
+    if CH_INFO_ID:
+        rows.append([styled_btn("🕯️ Gunakan CH_INFO_ID Default", callback_data="reset_default_ch_info", style="success")])
+    rows.append([styled_btn("❌ Batal", callback_data="open_admin_panel", style="danger")])
 
     await call.message.edit_text(
-        "📢 <b>ATUR CHANNEL TUJUAN CONFESS & PM</b>\n\n"
-        "Pilih tombol cepat dari variabel Railway di bawah, atau ketik manual <b>ID Channel</b> (<code>-100xxxx</code>) / <b>@username</b>:",
+        "🕯️ <b>ATUR CHANNEL TUJUAN CONFESS</b>\n\n"
+        "Kirimkan <b>ID Channel</b> contoh <code>-1001234567890</code> atau <b>@username_channel</b>, "
+        "atau tekan tombol di bawah untuk kembali memakai <code>CH_INFO_ID</code> dari Railway:",
         parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=preset_rows),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
 
-@dp.callback_query(F.data.in_({"use_env_ch_info", "use_env_ch_promote"}))
-async def cb_use_env_ch(call: types.CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data == "reset_default_ch_info")
+async def cb_reset_default_ch_info(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id != OWNER_ID:
         return await call.answer("Khusus Owner bar!", show_alert=True)
     await state.clear()
-    await call.answer("Memeriksa koneksi channel...")
-    chosen = getattr(cfg, "CH_INFO_ID", None) if call.data == "use_env_ch_info" else getattr(cfg, "CH_PROMOTE_ID", None)
-    if not chosen:
-        return await call.message.edit_text("⚠️ Variabel channel kosong di Railway.", reply_markup=_back_to_admin_kb())
-    res = await _apply_and_verify_channel(str(chosen))
+    await call.answer("Memeriksa CH_INFO_ID...")
+    res = await _apply_and_verify_channel(str(CH_INFO_ID), "target_channel_id", "Channel Confess")
     await call.message.edit_text(res, parse_mode=ParseMode.HTML, reply_markup=_back_to_admin_kb())
 
 
@@ -357,7 +352,7 @@ async def fsm_adm_setch(message: types.Message, state: FSMContext):
         await state.clear()
         return await _send_admin_dashboard_msg(message)
 
-    res = await _apply_and_verify_channel(message.text)
+    res = await _apply_and_verify_channel(message.text, "target_channel_id", "Channel Confess")
     await state.clear()
     await message.answer(res, parse_mode=ParseMode.HTML, reply_markup=_back_to_admin_kb())
 
@@ -374,7 +369,68 @@ async def cmd_setch(message: types.Message):
             parse_mode=ParseMode.HTML,
         )
 
-    res = await _apply_and_verify_channel(parts[1])
+    res = await _apply_and_verify_channel(parts[1], "target_channel_id", "Channel Confess")
+    await message.answer(res, parse_mode=ParseMode.HTML)
+
+
+# --- PENGATURAN CHANNEL PROMOTE (CH_PROMOTE_ID) ---
+@dp.callback_query(F.data == "adm_setpromotech")
+async def cb_adm_setpromotech(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != OWNER_ID:
+        return await call.answer("Khusus Owner bar!", show_alert=True)
+    await call.answer()
+    await state.set_state(AdminActionState.waiting_promote_channel_id)
+
+    rows = []
+    if CH_PROMOTE_ID:
+        rows.append([styled_btn("📣 Gunakan CH_PROMOTE_ID Default", callback_data="reset_default_ch_promote", style="success")])
+    rows.append([styled_btn("❌ Batal", callback_data="open_admin_panel", style="danger")])
+
+    await call.message.edit_text(
+        "📣 <b>ATUR CHANNEL TUJUAN PROMOTE</b>\n\n"
+        "Kirimkan <b>ID Channel</b> contoh <code>-1001234567890</code> atau <b>@username_channel</b>, "
+        "atau tekan tombol di bawah untuk kembali memakai <code>CH_PROMOTE_ID</code> dari Railway:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@dp.callback_query(F.data == "reset_default_ch_promote")
+async def cb_reset_default_ch_promote(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != OWNER_ID:
+        return await call.answer("Khusus Owner bar!", show_alert=True)
+    await state.clear()
+    await call.answer("Memeriksa CH_PROMOTE_ID...")
+    res = await _apply_and_verify_channel(str(CH_PROMOTE_ID), "promote_channel_id", "Channel Promote")
+    await call.message.edit_text(res, parse_mode=ParseMode.HTML, reply_markup=_back_to_admin_kb())
+
+
+@dp.message(AdminActionState.waiting_promote_channel_id, F.chat.type == "private")
+async def fsm_adm_setpromotech(message: types.Message, state: FSMContext):
+    if message.from_user.id != OWNER_ID:
+        return
+    if not message.text or message.text.startswith("/cancel"):
+        await state.clear()
+        return await _send_admin_dashboard_msg(message)
+
+    res = await _apply_and_verify_channel(message.text, "promote_channel_id", "Channel Promote")
+    await state.clear()
+    await message.answer(res, parse_mode=ParseMode.HTML, reply_markup=_back_to_admin_kb())
+
+
+@dp.message(Command("setpromotech"), F.chat.type == "private")
+async def cmd_setpromotech(message: types.Message):
+    if message.from_user.id != OWNER_ID:
+        return await message.answer("⚠️ Perintah ini merupakan hak eksklusif <b>Owner</b> bar.", parse_mode=ParseMode.HTML)
+
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        return await message.answer(
+            "Format: <code>/setpromotech -1001234567890</code> atau <code>/setpromotech @usernamechannel</code>",
+            parse_mode=ParseMode.HTML,
+        )
+
+    res = await _apply_and_verify_channel(parts[1], "promote_channel_id", "Channel Promote")
     await message.answer(res, parse_mode=ParseMode.HTML)
 
 
@@ -489,8 +545,8 @@ async def _execute_addshop(target_ident: str, shop_name: str) -> str:
     except Exception:
         pass
 
-    # Otomatis umumkan lapak baru di CH_PROMOTE_ID jika dikonfigurasi
-    promote_ch = getattr(cfg, "CH_PROMOTE_ID", None)
+    db_promote = await get_bar_setting("promote_channel_id")
+    promote_ch = (int(db_promote) if str(db_promote).lstrip("-").isdigit() else db_promote) if db_promote else (CH_PROMOTE_ID if CH_PROMOTE_ID else None)
     if promote_ch:
         try:
             me = await bot.get_me()
@@ -508,7 +564,7 @@ async def _execute_addshop(target_ident: str, shop_name: str) -> str:
                 reply_markup=promo_kb,
             )
         except Exception as e:
-            logging.warning("Gagal broadcast lapak ke CH_PROMOTE_ID: %s", e)
+            logging.warning("Gagal broadcast lapak ke channel promote: %s", e)
 
     return (
         f"✅ <b>Lapak Partner Berhasil Didaftarkan!</b>\n"
@@ -570,7 +626,7 @@ async def cb_adm_delshop(call: types.CallbackQuery, state: FSMContext):
     await state.set_state(AdminActionState.waiting_delshop)
     await call.message.edit_text(
         "🗑️ <b>HAPUS LAPAK PARTNER</b>\n\n"
-        "Ketik angka <b>ID Toko</b> yang ingin dihapus — cek ID di menu <i>Daftar Lapak & Staf Admin</i>:",
+        "Ketik angka <b>ID Toko</b> yang ingin dihapus — cek ID di menu <i>Lapak & Admin</i>:",
         parse_mode=ParseMode.HTML,
         reply_markup=_cancel_to_admin_kb(),
     )
@@ -824,7 +880,8 @@ async def register_hans_commands():
     private_cmds = [
         BotCommand(command="start", description="Buka Lobi Resepsionis & Pintu Masuk Bar"),
         BotCommand(command="daily", description="Klaim Absen Harian +20 VC"),
-        BotCommand(command="confess", description="Kirim Curhat Anonim ke Channel Confess"),
+        BotCommand(command="confess", description="Kirim Curhat Anonim ke Channel Info"),
+        BotCommand(command="promote", description="Tayangkan Promosi ke Channel Promote"),
         BotCommand(command="admin", description="Panel Kontrol Bar, Password & Tampilan"),
     ]
     await bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
