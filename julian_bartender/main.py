@@ -15,6 +15,7 @@ from aiogram.types import (
 )
 
 import shared.database as db
+import shared.config as cfg
 from julian_bartender.helpers import (
     bot,
     GROUP_ID,
@@ -40,8 +41,16 @@ except Exception as e:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("julian_bartender")
 
+MINIAPP_URL = (
+    os.environ.get("MINIAPP_MENU_URL")
+    or getattr(cfg, "MINIAPP_MENU_URL", None)
+    or os.environ.get("WEBAPP_DIRECT_URL")
+    or os.environ.get("WEBAPP_URL")
+    or WEBAPP_DIRECT_URL
+    or ""
+).strip()
+
 dp = Dispatcher(storage=MemoryStorage())
-# Urutan penting: vip_booth_router didaftarkan pertama agar proteksi topik berjalan sebelum handler lain
 dp.include_router(vip_booth_router)
 dp.include_router(bar_service_router)
 dp.include_router(games_router)
@@ -162,19 +171,19 @@ async def register_julian_commands():
 
     await bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
 
-    if WEBAPP_DIRECT_URL and WEBAPP_DIRECT_URL.startswith("https://") and not WEBAPP_DIRECT_URL.startswith("https://t.me/"):
+    if MINIAPP_URL.startswith("https://") and not MINIAPP_URL.startswith("https://t.me/"):
         try:
             await bot.set_chat_menu_button(
                 menu_button=MenuButtonWebApp(
                     text="🍸 Menu",
-                    web_app=WebAppInfo(url=WEBAPP_DIRECT_URL),
+                    web_app=WebAppInfo(url=MINIAPP_URL),
                 )
             )
-            logger.info("MenuButtonWebApp terpasang ke: %s", WEBAPP_DIRECT_URL)
+            logger.info("MenuButtonWebApp terpasang ke: %s", MINIAPP_URL)
         except Exception as e:
             logger.warning("Gagal pasang MenuButtonWebApp: %s", e)
     else:
-        logger.warning("WEBAPP_DIRECT_URL belum valid untuk Mini App: %s", WEBAPP_DIRECT_URL)
+        logger.warning("MINIAPP_MENU_URL belum valid untuk Mini App: %s", MINIAPP_URL)
 
 
 async def main():
