@@ -21,6 +21,8 @@ from julian_bartender.helpers import (
     resolve_target_smart,
     log_tx,
     add_bar_quest,
+    add_shift_action,
+    format_shift_progress_note,
     get_setting,
     set_setting,
     get_service_media,
@@ -46,7 +48,7 @@ async def on_member_join_bar(message: types.Message):
 
     mentions = ", ".join(mention_user(u.id, u.first_name) for u in new_guests)
     greeting_text = random.choice(BARTENDER_GREETINGS).format(mention=mentions)
-    greeting_text += "\n\n<i>(Saldo awal <b>50 VC</b> telah disiapkan di tab Anda. Tekan tombol di bawah atau ketik <code>/menu</code> untuk melihat daftar sajian.)</i>"
+    greeting_text += "\n\n<i>Saldo awal <b>50 VC</b> telah disiapkan di tab Anda. Tekan tombol di bawah atau ketik <code>/menu</code> untuk melihat daftar sajian.</i>"
 
     sent = await message.answer(
         greeting_text,
@@ -97,7 +99,7 @@ async def cmd_set_menu_media(message: types.Message):
     parts = (message.text or "").split()
     if len(parts) < 2 or parts[1].lower() not in valid:
         return await message.reply(
-            "Reply GIF atau Foto dengan:\n<code>/setmenumedia <kategori></code>\n\n"
+            "Reply GIF atau Foto dengan:\n<code>/setmenumedia kategori</code>\n\n"
             "Kategori: <code>drink</code>, <code>custom_mix</code>, <code>food</code>, <code>song</code>",
             parse_mode=ParseMode.HTML,
         )
@@ -127,7 +129,7 @@ async def cmd_set_gift_image(message: types.Message):
     if len(parts) < 2 or parts[1].lower() not in GIFTS_CATALOG:
         codes = ", ".join(f"<code>{k}</code>" for k in GIFTS_CATALOG.keys())
         return await message.reply(
-            f"Reply foto atau GIF dengan:\n<code>/setgiftimg <kode></code>\n\nKode: {codes}",
+            f"Reply foto atau GIF dengan:\n<code>/setgiftimg kode</code>\n\nKode: {codes}",
             parse_mode=ParseMode.HTML,
         )
 
@@ -146,7 +148,7 @@ async def cmd_set_gift_image(message: types.Message):
         """, code, file_id, mtype)
 
     await message.reply(
-        f"✅ Media hadiah <b>{GIFTS_CATALOG[code]['name']}</b> (<code>{code}</code>) diperbarui.",
+        f"✅ Media hadiah <b>{GIFTS_CATALOG[code]['name']}</b> — <code>{code}</code> diperbarui.",
         parse_mode=ParseMode.HTML,
     )
 
@@ -159,7 +161,7 @@ async def cmd_set_gift_channel(message: types.Message):
     if len(parts) < 2:
         cur = await get_setting("gift_channel_id") or getattr(cfg, "GIFT_CHANNEL_ID", "Belum diatur")
         return await message.reply(
-            f"Format: <code>/setgiftch -1001234567890</code> (atau <code>off</code>).\nChannel saat ini: <code>{cur}</code>",
+            f"Format: <code>/setgiftch -1001234567890</code> atau <code>off</code>.\nChannel saat ini: <code>{cur}</code>",
             parse_mode=ParseMode.HTML,
         )
 
@@ -182,13 +184,13 @@ async def cmd_send_gift(message: types.Message):
         reg_lines = []
         sp_lines = []
         for code, g in GIFTS_CATALOG.items():
-            line = f"• <code>{code}</code> — {g['emoji']} {g['name']} ({g['price']} VC | +{g['charm']} ✨)"
+            line = f"• <code>{code}</code> — {g['emoji']} {g['name']} • {g['price']} VC | +{g['charm']} ✨"
             (sp_lines if g["special"] else reg_lines).append(line)
 
         catalog_text = (
             "🎁 <b>Katalog Hadiah The Velvet Hour</b>\n\n"
             + "\n".join(reg_lines)
-            + "\n\n👑 <b>Hadiah Istimewa</b> <i>(Auto-Pin & Channel)</i>\n"
+            + "\n\n👑 <b>Hadiah Istimewa</b> — <i>Auto-Pin & Channel</i>\n"
             + "\n".join(sp_lines)
             + "\n\nCara kirim: <code>/gift @username kode</code> atau reply pesan target dengan <code>/gift kode</code>"
         )
@@ -236,7 +238,7 @@ async def cmd_send_gift(message: types.Message):
             s_row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", sender.id)
             if not s_row or (s_row["coins"] or 0) < cost:
                 err_msg = await message.reply(
-                    f"Saldo tidak cukup untuk <b>{gift['name']}</b> (butuh <b>{cost} VC</b>, saldo kamu: <b>{(s_row['coins'] or 0) if s_row else 0} VC</b>).",
+                    f"Saldo tidak cukup untuk <b>{gift['name']}</b> — butuh <b>{cost} VC</b>, saldo kamu: <b>{(s_row['coins'] or 0) if s_row else 0} VC</b>.",
                     parse_mode=ParseMode.HTML,
                 )
                 await schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
@@ -262,7 +264,7 @@ async def cmd_send_gift(message: types.Message):
     verb = "mempersembahkan" if is_special else "mengirimkan"
     caption = (
         f"{prefix_crown}{gift['emoji']} <b>{gift['name']}</b>\n"
-        f"{mention_user(sender.id, sender.first_name)} {verb} {gift['desc']} kepada {mention_user(target['user_id'], target['full_name'])} (<b>+{charm_gain} Charm ✨</b>)."
+        f"{mention_user(sender.id, sender.first_name)} {verb} {gift['desc']} kepada {mention_user(target['user_id'], target['full_name'])} • <b>+{charm_gain} Charm ✨</b>."
         f"{note_line}"
     )
 
@@ -288,7 +290,7 @@ async def cmd_send_gift(message: types.Message):
         if ch_id_raw:
             ch_caption = (
                 f"👑 {gift['emoji']} <b>{gift['name']}</b>\n"
-                f"{mention_user(sender.id, sender.first_name)} → {mention_user(target['user_id'], target['full_name'])} (<b>+{charm_gain} Charm ✨</b>)"
+                f"{mention_user(sender.id, sender.first_name)} → {mention_user(target['user_id'], target['full_name'])} • <b>+{charm_gain} Charm ✨</b>"
                 f"{note_line}"
             )
             try:
@@ -317,7 +319,7 @@ async def cmd_menu_miniapp(message: types.Message):
     if is_private:
         await message.answer(
             "🥂 <i>Julian membuka tablet menu beludru di hadapanmu.</i>\n"
-            "Klik tombol di bawah (atau tombol <b>Menu</b> di kiri bawah keyboard) untuk membuka Web Menu & Jukebox:",
+            "Klik tombol di bawah atau tombol <b>Menu</b> di kiri bawah keyboard untuk membuka Web Menu & Jukebox:",
             parse_mode=ParseMode.HTML,
             reply_markup=miniapp_menu_kb(is_private=True),
         )
@@ -362,7 +364,7 @@ async def cmd_order_drink(message: types.Message):
 
             if coins < cost:
                 err_msg = await message.reply(
-                    f"Saldo VC tidak cukup untuk memesan <b>{item_name}</b> (butuh <b>{cost} VC</b>, saldo kamu: <b>{coins} VC</b>).",
+                    f"Saldo VC tidak cukup untuk memesan <b>{item_name}</b> — butuh <b>{cost} VC</b>, saldo kamu: <b>{coins} VC</b>.",
                     parse_mode=ParseMode.HTML,
                 )
                 await schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
@@ -372,6 +374,9 @@ async def cmd_order_drink(message: types.Message):
                 await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", cost, user.id)
                 await log_tx(conn, user.id, -cost, f"Pesan minuman: {item_name}")
             await add_bar_quest(conn, user.id)
+
+    cnt, is_shift = await add_shift_action(user.id, ("bartender", "waiter"))
+    shift_note = format_shift_progress_note(cnt, is_shift)
 
     await react_msg(message.chat.id, message.message_id, "🍸")
     send_kwargs = {"message_thread_id": message.message_thread_id} if message.message_thread_id else {}
@@ -388,7 +393,7 @@ async def cmd_order_drink(message: types.Message):
     vip_tag = " 👑" if (is_vip_item or is_vip) else ""
     caption = (
         f"🍸 Julian menggeser segelas <b>{item_name}</b> di atas meja bar mahoni menuju {mention_user(user.id, user.first_name)}{vip_tag}.\n\n"
-        f"<i>\"Silakan dinikmati malam ini.\"</i>"
+        f"<i>\"Silakan dinikmati malam ini.\"</i>{shift_note}"
     )
     media_src, mtype = await get_service_media("drink")
     try:
@@ -430,7 +435,7 @@ async def cmd_eat_food(message: types.Message):
 
             if coins < cost:
                 err_msg = await message.reply(
-                    f"Saldo VC tidak cukup untuk memesan <b>{item_name}</b> (butuh <b>{cost} VC</b>).",
+                    f"Saldo VC tidak cukup untuk memesan <b>{item_name}</b> — butuh <b>{cost} VC</b>.",
                     parse_mode=ParseMode.HTML,
                 )
                 await schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
@@ -440,6 +445,9 @@ async def cmd_eat_food(message: types.Message):
                 await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", cost, user.id)
                 await log_tx(conn, user.id, -cost, f"Pesan makanan: {item_name}")
             await add_bar_quest(conn, user.id)
+
+    cnt, is_shift = await add_shift_action(user.id, ("waiter",))
+    shift_note = format_shift_progress_note(cnt, is_shift)
 
     await react_msg(message.chat.id, message.message_id, "🍽️")
     send_kwargs = {"message_thread_id": message.message_thread_id} if message.message_thread_id else {}
@@ -456,7 +464,7 @@ async def cmd_eat_food(message: types.Message):
     vip_tag = " 👑" if (is_vip_item or is_vip) else ""
     caption = (
         f"🍽️ Hidangan hangat <b>{item_name}</b> baru saja keluar dari dapur dan disajikan ke meja {mention_user(user.id, user.first_name)}{vip_tag}.\n\n"
-        f"<i>\"Selamat menikmati santapan malam Anda.\"</i>"
+        f"<i>\"Selamat menikmati santapan malam Anda.\"</i>{shift_note}"
     )
     media_src, mtype = await get_service_media("food")
     try:
@@ -480,7 +488,7 @@ async def cmd_treat_guest(message: types.Message):
 
     if len(parts) < 2 and not has_reply:
         err_msg = await message.reply(
-            "Format: <code>/treat @username [nama menu]</code> atau reply pesan temanmu dengan <code>/treat [nama menu]</code> (20 VC, +5 Charm).",
+            "Format: <code>/treat @username nama menu</code> atau reply pesan temanmu dengan <code>/treat nama menu</code> — 20 VC, +5 Charm.",
             parse_mode=ParseMode.HTML,
         )
         await schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
@@ -513,11 +521,14 @@ async def cmd_treat_guest(message: types.Message):
 
             await conn.execute("UPDATE users SET coins = coins - 20 WHERE user_id = $1", sender.id)
             await conn.execute("UPDATE users SET charm_points = COALESCE(charm_points, 0) + 5 WHERE user_id = $1", target["user_id"])
-            await log_tx(conn, sender.id, -20, f"Traktir {target['full_name']} ({menu_text})")
+            await log_tx(conn, sender.id, -20, f"Traktir {target['full_name']} — {menu_text}")
             await add_bar_quest(conn, sender.id)
+
+    cnt, is_shift = await add_shift_action(sender.id, ("bartender", "waiter"))
+    shift_note = format_shift_progress_note(cnt, is_shift)
 
     await react_msg(message.chat.id, message.message_id, "🥂")
     await message.reply(
-        f"🥂 {mention_user(sender.id, sender.first_name)} mentraktir <b>{menu_text}</b> untuk {mention_user(target['user_id'], target['full_name'])} (<b>+5 Charm ✨</b>).",
+        f"🥂 {mention_user(sender.id, sender.first_name)} mentraktir <b>{menu_text}</b> untuk {mention_user(target['user_id'], target['full_name'])} • <b>+5 Charm ✨</b>.{shift_note}",
         parse_mode=ParseMode.HTML,
     )
