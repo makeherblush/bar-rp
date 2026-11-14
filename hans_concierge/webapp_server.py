@@ -542,7 +542,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         </div>
 
         <div id="claim-area" class="ref-claim-row" onclick="event.stopPropagation()">
-          <input type="text" id="input-ref-code" class="ref-input" placeholder="Punya kode teman? Masukkan..." maxlength="16" />
+          <input type="text" id="input-ref-code" class="ref-input" placeholder="Punya kode teman? Masukkan..." maxlength="20" />
           <button class="btn-claim-ref" onclick="claimReferral(event)">Klaim</button>
         </div>
       </div>
@@ -635,7 +635,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <div class="glass-panel">
       <div class="panel-title">🎶 Jukebox Booth — Kaelen DJ</div>
       <div class="panel-desc">
-        Pilih lagu untuk diputar di ruang utama grup (<b>10 VC</b>, Gratis VIP).
+        Pilih lagu untuk diputar di ruang utama grup & Voice Chat (<b>10 VC</b>, Gratis VIP).
       </div>
       <input type="text" id="song-input" class="glass-input" style="margin-top: 14px;" placeholder="Contoh: Apocalypse - Cigarettes After Sex" />
       <button class="btn-primary-full" onclick="submitSong()">🎧 Putar di Ruangan</button>
@@ -865,7 +865,6 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     function copyReferral(e) {
       e.stopPropagation();
       haptic("medium");
-      const shareText = `Gabung ke The Velvet Hour Lounge! Gunakan kode referral saya: ${currentRefCode} untuk bonus +25 VC.`;
       if (navigator.clipboard) {
         navigator.clipboard.writeText(currentRefCode);
       }
@@ -988,10 +987,19 @@ async def _ensure_webapp_schema_and_user(conn, tg_user: dict):
     await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_count INTEGER DEFAULT 0;")
     await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_thread_id BIGINT;")
 
+    await conn.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'shop_items') THEN
+                ALTER TABLE shop_items ADD COLUMN IF NOT EXISTS content_text TEXT;
+            END IF;
+        END $$;
+    """)
+
     uid = int(tg_user["id"])
     username = tg_user.get("username")
     full_name = f"{tg_user.get('first_name', '')} {tg_user.get('last_name', '')}".strip() or "Tamu"
-    ref_code = _make_ref_code(uid)
+    default_ref_code = _make_ref_code(uid)
 
     await conn.execute("""
         INSERT INTO users (user_id, username, full_name, coins, charm_points, referral_code, referral_count)
@@ -999,8 +1007,77 @@ async def _ensure_webapp_schema_and_user(conn, tg_user: dict):
         ON CONFLICT (user_id) DO UPDATE SET
             username = COALESCE(EXCLUDED.username, users.username),
             full_name = EXCLUDED.full_name,
-            referral_code = COALESCE(users.referral_code, EXCLUDED.referral_code);
-    """, uid, username, full_name, ref_code)
+            referral_code = COALESCE(NULLIF(users.referral_code, ''), EXCLUDED.referral_code);
+    """, uid, username, full_name, default_ref_code)
+
+
+async def _enqueue_kaelen_song(conn, uid: int, requester_name: str, song_query: str, thread_id: int | None):
+    """Masukkan request lagu ke tabel antrean database Kaelen DJ (deteksi tabel & kolom otomatis)."""
+    candidate_tables = ["song_requests", "music_queue", "jukebox_queue", "jukebox_requests", "song_queue"]
+    target_table = None
+    cols = set()
+
+    for tbl in candidate_tables:
+        rows = await conn.fetch(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = $1",
+            tbl,
+        )
+        if rows:
+            target_table = tbl
+            cols = {r["column_name"] for r in rows}
+            break
+
+    if not target_table:
+        target_table = "song_requests"
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS song_requests (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
+                requester_name TEXT,
+                song_title TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                thread_id BIGINT,
+                created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()
+            );
+        """)
+        cols = {"id", "user_id", "requester_name", "song_title", "status", "thread_id", "created_at"}
+
+    insert_cols = []
+    insert_vals = []
+
+    if "user_id" in cols:
+        insert_cols.append("user_id")
+        insert_vals.append(uid)
+    if "requester_name" in cols:
+        insert_cols.append("requester_name")
+        insert_vals.append(requester_name)
+    elif "username" in cols:
+        insert_cols.append("username")
+        insert_vals.append(requester_name)
+
+    for song_col in ("song_title", "title", "query", "song_name", "song"):
+        if song_col in cols:
+            insert_cols.append(song_col)
+            insert_vals.append(song_query)
+            break
+
+    if "status" in cols:
+        insert_cols.append("status")
+        insert_vals.append("pending")
+    if "thread_id" in cols and thread_id:
+        insert_cols.append("thread_id")
+        insert_vals.append(thread_id)
+    if "created_at" in cols:
+        insert_cols.append("created_at")
+        insert_vals.append(datetime.utcnow())
+
+    if insert_cols:
+        placeholders = ", ".join(f"${i}" for i in range(1, len(insert_vals) + 1))
+        col_sql = ", ".join(insert_cols)
+        await conn.execute(
+            f"INSERT INTO {target_table} ({col_sql}) VALUES ({placeholders})",
+            *insert_vals,
+        )
 
 
 async def _get_custom_service_media(category: str) -> tuple[str, str]:
@@ -1015,31 +1092,66 @@ async def _get_custom_service_media(category: str) -> tuple[str, str]:
     return DEFAULT_SERVICE_GIFS.get(category, DEFAULT_SERVICE_GIFS["drink"]), "animation"
 
 
+async def _send_group_media_or_text(
+    bot_client: Bot,
+    caption: str,
+    media_src: str | None = None,
+    mtype: str = "animation",
+    thread_id: int | None = None,
+    uid_to_clear_thread: int | None = None,
+):
+    """Kirim ke topik aktif user; jika topik sudah dihapus/tidak valid, otomatis fallback ke General."""
+    attempts = [thread_id, None] if thread_id else [None]
+    for tid in attempts:
+        kwargs = {"message_thread_id": tid} if tid else {}
+        try:
+            if media_src and mtype == "photo":
+                return await bot_client.send_photo(cfg.GROUP_ID, photo=media_src, caption=caption, parse_mode=ParseMode.HTML, **kwargs)
+            elif media_src:
+                return await bot_client.send_animation(cfg.GROUP_ID, animation=media_src, caption=caption, parse_mode=ParseMode.HTML, **kwargs)
+            else:
+                return await bot_client.send_message(cfg.GROUP_ID, text=caption, parse_mode=ParseMode.HTML, **kwargs)
+        except Exception as e:
+            err_lower = str(e).lower()
+            if tid and "thread not found" in err_lower:
+                if uid_to_clear_thread:
+                    try:
+                        async with db.pool.acquire() as conn:
+                            await conn.execute("UPDATE users SET last_thread_id = NULL WHERE user_id = $1", uid_to_clear_thread)
+                    except Exception:
+                        pass
+                continue
+            if media_src:
+                try:
+                    return await bot_client.send_message(cfg.GROUP_ID, text=caption, parse_mode=ParseMode.HTML, **kwargs)
+                except Exception as e2:
+                    if tid and "thread not found" in str(e2).lower():
+                        continue
+            raise
+
+
 async def _serve_with_bartender_animation(
     category: str,
     mention: str,
     item_name: str,
     is_vip: bool,
     thread_id: int | None = None,
+    uid: int | None = None,
 ):
     vip_tag = " 👑" if is_vip else ""
-    send_kwargs = {"message_thread_id": thread_id} if thread_id else {}
-
-    try:
-        await julian_bot.send_chat_action(cfg.GROUP_ID, ChatAction.TYPING, **send_kwargs)
-    except Exception:
-        pass
 
     if category in ("drink", "custom_mix"):
-        prep_msg = await julian_bot.send_message(
-            cfg.GROUP_ID,
-            f"🧊 <i>Julian menyiapkan gelas kristal dingin dan mengocok shaker untuk {mention}...</i>",
-            parse_mode=ParseMode.HTML,
-            **send_kwargs,
-        )
-        await asyncio.sleep(1.5)
         try:
-            await julian_bot.delete_message(cfg.GROUP_ID, prep_msg.message_id)
+            prep_msg = await _send_group_media_or_text(
+                julian_bot,
+                f"🧊 <i>Julian menyiapkan gelas kristal dingin dan mengocok shaker untuk {mention}...</i>",
+                media_src=None,
+                thread_id=thread_id,
+                uid_to_clear_thread=uid,
+            )
+            await asyncio.sleep(1.5)
+            if prep_msg:
+                await julian_bot.delete_message(cfg.GROUP_ID, prep_msg.message_id)
         except Exception:
             pass
 
@@ -1049,26 +1161,21 @@ async def _serve_with_bartender_animation(
             else f"🍸 Julian menggeser segelas <b>{item_name}</b> di atas meja bar mahoni menuju {mention}{vip_tag}."
         )
         caption = f"{action_line}\n\n<i>\"Silakan dinikmati malam ini.\"</i>"
-
         media_src, mtype = await _get_custom_service_media(category)
-        try:
-            if mtype == "photo":
-                await julian_bot.send_photo(cfg.GROUP_ID, photo=media_src, caption=caption, parse_mode=ParseMode.HTML, **send_kwargs)
-            else:
-                await julian_bot.send_animation(cfg.GROUP_ID, animation=media_src, caption=caption, parse_mode=ParseMode.HTML, **send_kwargs)
-        except Exception:
-            await julian_bot.send_message(cfg.GROUP_ID, caption, parse_mode=ParseMode.HTML, **send_kwargs)
+        await _send_group_media_or_text(julian_bot, caption, media_src, mtype, thread_id, uid)
 
     elif category == "food":
-        prep_msg = await julian_bot.send_message(
-            cfg.GROUP_ID,
-            f"🔥 <i>Chef di dapur sedang menata hidangan hangat untuk {mention}...</i>",
-            parse_mode=ParseMode.HTML,
-            **send_kwargs,
-        )
-        await asyncio.sleep(1.7)
         try:
-            await julian_bot.delete_message(cfg.GROUP_ID, prep_msg.message_id)
+            prep_msg = await _send_group_media_or_text(
+                julian_bot,
+                f"🔥 <i>Chef di dapur sedang menata hidangan hangat untuk {mention}...</i>",
+                media_src=None,
+                thread_id=thread_id,
+                uid_to_clear_thread=uid,
+            )
+            await asyncio.sleep(1.7)
+            if prep_msg:
+                await julian_bot.delete_message(cfg.GROUP_ID, prep_msg.message_id)
         except Exception:
             pass
 
@@ -1077,13 +1184,7 @@ async def _serve_with_bartender_animation(
             f"<i>\"Selamat menikmati santapan malam Anda.\"</i>"
         )
         media_src, mtype = await _get_custom_service_media("food")
-        try:
-            if mtype == "photo":
-                await julian_bot.send_photo(cfg.GROUP_ID, photo=media_src, caption=caption, parse_mode=ParseMode.HTML, **send_kwargs)
-            else:
-                await julian_bot.send_animation(cfg.GROUP_ID, animation=media_src, caption=caption, parse_mode=ParseMode.HTML, **send_kwargs)
-        except Exception:
-            await julian_bot.send_message(cfg.GROUP_ID, caption, parse_mode=ParseMode.HTML, **send_kwargs)
+        await _send_group_media_or_text(julian_bot, caption, media_src, mtype, thread_id, uid)
 
 
 async def handle_index(request: web.Request) -> web.Response:
@@ -1107,16 +1208,21 @@ async def handle_api_me(request: web.Request) -> web.Response:
             "SELECT coins, charm_points, is_vip, vip_until, referral_code, referred_by, referral_count FROM users WHERE user_id = $1",
             uid,
         )
-        items = await conn.fetch("""
-            SELECT si.id, si.title, si.price_vc, si.content_text, ps.shop_name
-            FROM shop_items si
-            JOIN partner_shops ps ON si.shop_id = ps.id
-            WHERE si.is_sold = FALSE
-            ORDER BY si.id DESC LIMIT 20
-        """)
+        try:
+            items = await conn.fetch("""
+                SELECT si.id, si.title, si.price_vc,
+                       COALESCE(si.content_text, '') AS content_text,
+                       ps.shop_name
+                FROM shop_items si
+                JOIN partner_shops ps ON si.shop_id = ps.id
+                WHERE si.is_sold = FALSE
+                ORDER BY si.id DESC LIMIT 20
+            """)
+        except Exception:
+            items = []
 
     coins = row["coins"] if row else 50
-    charm_points = row["charm_points"] or 0 if row else 0
+    charm_points = (row["charm_points"] or 0) if row else 0
     is_vip = bool(row and row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
     shop_list = [
         {
@@ -1133,7 +1239,7 @@ async def handle_api_me(request: web.Request) -> web.Response:
         "coins": coins,
         "charm_points": charm_points,
         "is_vip": is_vip,
-        "referral_code": row["referral_code"] if row else _make_ref_code(uid),
+        "referral_code": row["referral_code"] if (row and row["referral_code"]) else _make_ref_code(uid),
         "referral_count": (row["referral_count"] or 0) if row else 0,
         "has_referred": bool(row and row["referred_by"]),
         "shop_items": shop_list,
@@ -1147,9 +1253,11 @@ async def handle_api_referral(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": "Sesi tidak valid"}, status=401)
 
     uid = int(tg_user["id"])
-    code = str(body.get("code", "")).strip().upper()
-    if not code:
+    raw_code = str(body.get("code", "")).strip().upper()
+    if not raw_code:
         return web.json_response({"ok": False, "error": "Kode referral kosong."})
+
+    clean_num = raw_code.replace("REF_", "").replace("REF-", "")
 
     async with db.pool.acquire() as conn:
         async with conn.transaction():
@@ -1157,10 +1265,18 @@ async def handle_api_referral(request: web.Request) -> web.Response:
             me = await conn.fetchrow("SELECT coins, referred_by, referral_code FROM users WHERE user_id = $1 FOR UPDATE", uid)
             if me["referred_by"]:
                 return web.json_response({"ok": False, "error": "Kamu sudah pernah mengklaim kode referral."})
-            if me["referral_code"] == code:
+            if me["referral_code"] == raw_code or (clean_num.isdigit() and int(clean_num) == uid):
                 return web.json_response({"ok": False, "error": "Tidak bisa memakai kode referral sendiri."})
 
-            inviter = await conn.fetchrow("SELECT user_id, full_name FROM users WHERE referral_code = $1 FOR UPDATE", code)
+            inviter = await conn.fetchrow(
+                "SELECT user_id, full_name FROM users WHERE UPPER(referral_code) = $1 FOR UPDATE",
+                raw_code,
+            )
+            if not inviter and clean_num.isdigit():
+                inviter = await conn.fetchrow(
+                    "SELECT user_id, full_name FROM users WHERE user_id = $1 FOR UPDATE",
+                    int(clean_num),
+                )
             if not inviter:
                 return web.json_response({"ok": False, "error": "Kode referral tidak ditemukan."})
 
@@ -1170,7 +1286,7 @@ async def handle_api_referral(request: web.Request) -> web.Response:
                 "UPDATE users SET coins = coins + 25, referral_count = COALESCE(referral_count, 0) + 1 WHERE user_id = $1",
                 inviter["user_id"],
             )
-            await log_wallet_tx(conn, uid, 25, f"Bonus klaim referral {code}")
+            await log_wallet_tx(conn, uid, 25, f"Bonus klaim referral {raw_code}")
             await log_wallet_tx(conn, inviter["user_id"], 25, f"Bonus undang teman ({tg_user.get('first_name', 'Tamu')})")
 
     return web.json_response({"ok": True, "new_coins": new_coins})
@@ -1183,7 +1299,8 @@ async def handle_api_order(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": "Sesi Telegram tidak valid"}, status=401)
 
     uid = int(tg_user["id"])
-    first_name = html.escape(tg_user.get("first_name", "Tamu"))
+    raw_first = tg_user.get("first_name", "Tamu")
+    first_name = html.escape(raw_first)
     mention = f'<a href="tg://user?id={uid}">{first_name}</a>'
     category = body.get("category", "drink")
 
@@ -1216,18 +1333,20 @@ async def handle_api_order(request: web.Request) -> web.Response:
                 await log_wallet_tx(conn, item["owner_id"], price, f"Penjualan {item['title']}")
 
         try:
+            note_val = item.get("content_text") or item.get("description") or "-"
             await hans_bot.send_message(
                 uid,
                 f"🧾 <b>Nota Pembelian — {html.escape(item['shop_name'])}</b>\n"
                 f"• Item: <b>{html.escape(item['title'])}</b> ({price} VC)\n"
-                f"• Catatan: {html.escape(item['content_text'] or '-')}",
+                f"• Catatan: {html.escape(str(note_val))}",
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
             pass
         return web.json_response({"ok": True, "new_coins": new_coins})
 
-    item_name = html.escape(str(body.get("item_name", "Menu"))[:100])
+    raw_item_name = str(body.get("item_name", "Menu")).strip()[:100]
+    item_name = html.escape(raw_item_name)
     base_price = int(body.get("price", 0))
 
     async with db.pool.acquire() as conn:
@@ -1254,23 +1373,19 @@ async def handle_api_order(request: web.Request) -> web.Response:
                 await conn.execute("UPDATE users SET coins = $1 WHERE user_id = $2", new_coins, uid)
                 await log_wallet_tx(conn, uid, -final_cost, f"Pesanan Mini App: {item_name}")
 
+            if category == "song":
+                await _enqueue_kaelen_song(conn, uid, raw_first, raw_item_name, thread_id)
+
     if category in ("drink", "custom_mix", "food"):
         await add_quest_progress(uid, "bar_social", 1)
-        asyncio.create_task(_serve_with_bartender_animation(category, mention, item_name, is_vip, thread_id))
+        asyncio.create_task(_serve_with_bartender_animation(category, mention, item_name, is_vip, thread_id, uid))
     elif category == "song":
         await add_quest_progress(uid, "music_vibe", 1)
-        send_kwargs = {"message_thread_id": thread_id} if thread_id else {}
         rp_text = (
             f"🎶 Kaelen memutar piringan hitam di booth DJ — <b>{item_name}</b> mengalun di seluruh ruangan atas permintaan {mention}."
         )
         media_src, mtype = await _get_custom_service_media("song")
-        try:
-            if mtype == "photo":
-                await kaelen_bot.send_photo(cfg.GROUP_ID, photo=media_src, caption=rp_text, parse_mode=ParseMode.HTML, **send_kwargs)
-            else:
-                await kaelen_bot.send_animation(cfg.GROUP_ID, animation=media_src, caption=rp_text, parse_mode=ParseMode.HTML, **send_kwargs)
-        except Exception:
-            await kaelen_bot.send_message(cfg.GROUP_ID, rp_text, parse_mode=ParseMode.HTML, **send_kwargs)
+        await _send_group_media_or_text(kaelen_bot, rp_text, media_src, mtype, thread_id, uid)
 
     return web.json_response({"ok": True, "new_coins": new_coins})
 
