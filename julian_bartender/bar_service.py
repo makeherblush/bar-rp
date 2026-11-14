@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime
 
 from aiogram import Router, F, types
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandStart
 from aiogram.enums import ParseMode
 
 import shared.database as db
@@ -59,7 +59,7 @@ async def on_member_join_bar(message: types.Message):
     await schedule_delete(message.chat.id, [sent.message_id], delay=60)
 
 
-@router.message(Command("start"), F.chat.type == "private")
+@router.message(CommandStart(), F.chat.type == "private")
 async def cmd_private_start(message: types.Message):
     user = message.from_user
     async with db.pool.acquire() as conn:
