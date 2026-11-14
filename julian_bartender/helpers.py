@@ -421,10 +421,20 @@ def mention_user(uid: int, name: str) -> str:
 
 def miniapp_menu_kb(is_private: bool = False, thread_id: int | None = None) -> InlineKeyboardMarkup:
     if is_private and WEBAPP_DIRECT_URL.startswith("https://") and not WEBAPP_DIRECT_URL.startswith("https://t.me/"):
-        btn = styled_btn("🍸 Buka Buku Menu & Jukebox", web_app=WebAppInfo(url=WEBAPP_DIRECT_URL), style="primary")
+        btn = InlineKeyboardButton(
+            text="🍸 Buka Buku Menu & Jukebox",
+            web_app=WebAppInfo(url=WEBAPP_DIRECT_URL),
+        )
     else:
-        deep_url = f"{TELEGRAM_DEEP_MINIAPP_URL}?startapp=topic_{thread_id}" if (thread_id and thread_id != 1) else TELEGRAM_DEEP_MINIAPP_URL
-        btn = styled_btn("🍸 Buka Buku Menu & Jukebox", url=deep_url, style="primary")
+        deep_url = (
+            f"{TELEGRAM_DEEP_MINIAPP_URL}?startapp=topic_{thread_id}"
+            if (thread_id and thread_id != 1)
+            else TELEGRAM_DEEP_MINIAPP_URL
+        )
+        btn = InlineKeyboardButton(
+            text="🍸 Buka Buku Menu & Jukebox",
+            url=deep_url,
+        )
     return InlineKeyboardMarkup(inline_keyboard=[[btn]])
 
 
