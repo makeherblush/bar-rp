@@ -10,10 +10,10 @@ from aiogram.enums import ParseMode
 
 import shared.database as db
 from hans_concierge.helpers import (
-    bot, OWNER_ID, GROUP_ID, REQUIRED_CN_SYMBOL, WELCOME_BONUS, VIP_COST_24H,
-    DAILY_REWARD_VC, REFERRAL_BONUS_VC, DAILY_QUESTS, get_bar_setting,
-    react_message, styled_btn, get_or_create_referral_code, log_wallet_tx,
-    add_quest_progress, insufficient_vc_kb, main_lobby_kb,
+    bot, OWNER_ID, GROUP_ID, CH_INFO_ID, CH_PROMOTE_ID, CH_INFO_LINK, CH_PROMOTE_LINK,
+    REQUIRED_CN_SYMBOL, WELCOME_BONUS, VIP_COST_24H, DAILY_REWARD_VC, REFERRAL_BONUS_VC,
+    DAILY_QUESTS, get_bar_setting, react_message, styled_btn, get_or_create_referral_code,
+    log_wallet_tx, add_quest_progress, insufficient_vc_kb, main_lobby_kb,
     info_categories_kb, back_info_kb
 )
 from hans_concierge.card_gen import (
@@ -59,6 +59,35 @@ async def _send_or_edit_lobby(
             return await msg.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb, message_effect_id=effect_id)
         return await msg.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
     return await target.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb, message_effect_id=effect_id)
+
+
+async def _check_required_channels(user_id: int) -> list[tuple[str, str]]:
+    """Memeriksa keanggotaan user pada CH_INFO_ID dan CH_PROMOTE_ID."""
+    if user_id == OWNER_ID:
+        return []
+
+    db_info = await get_bar_setting("target_channel_id")
+    info_ch = (int(db_info) if str(db_info).lstrip("-").isdigit() else db_info) if db_info else CH_INFO_ID
+
+    db_promote = await get_bar_setting("promote_channel_id")
+    promote_ch = (int(db_promote) if str(db_promote).lstrip("-").isdigit() else db_promote) if db_promote else CH_PROMOTE_ID
+
+    channels_to_check = []
+    if info_ch and info_ch != 0:
+        channels_to_check.append((info_ch, "Channel Info & Confess", CH_INFO_LINK))
+    if promote_ch and promote_ch != 0:
+        channels_to_check.append((promote_ch, "Channel Promote", CH_PROMOTE_LINK))
+
+    missing = []
+    for ch_id, label, link in channels_to_check:
+        try:
+            member = await bot.get_chat_member(chat_id=ch_id, user_id=user_id)
+            if member.status in ("left", "kicked", "banned"):
+                missing.append((label, link))
+        except Exception:
+            missing.append((label, link))
+
+    return missing
 
 
 # --- GERBANG UTAMA /start + KODE REFERRAL + CUSTOM WELCOME ICON ---
@@ -146,7 +175,7 @@ async def cb_back_lobby(call: types.CallbackQuery, state: FSMContext):
     await _send_or_edit_lobby(call, text, await main_lobby_kb(user.id))
 
 
-# --- VERIFIKASI MASUK BAR + CEK CN DETAIL & PASSWORD PINTU ---
+# --- VERIFIKASI MASUK BAR + CEK CN + WAJIB JOIN CHANNEL + PASSWORD PINTU ---
 async def _grant_bar_entry(user: types.User, target_msg: types.Message, edit: bool = True):
     ref_bonus_note = ""
     has_ref_bonus = False
@@ -185,7 +214,7 @@ async def _grant_bar_entry(user: types.User, target_msg: types.Message, edit: bo
             [styled_btn("⬅️ Kembali ke Lobi", callback_data="back_lobby")]
         ])
         out = (
-            f"✅ <b>VERIFIKASI ATRIBUT {REQUIRED_CN_SYMBOL} BERHASIL</b>\n"
+            f"✅ <b>VERIFIKASI ATRIBUT {REQUIRED_CN_SYMBOL} & CHANNEL BERHASIL</b>\n"
             f"{ref_bonus_note}\n"
             "<i>Hans membukakan pintu kayu mahoni dan mempersilakanmu masuk. Tautan pintu sekali pakai di bawah ini berlaku selama 10 menit:</i>"
         )
@@ -220,6 +249,7 @@ async def cb_enter_bar(call: types.CallbackQuery, state: FSMContext):
     user = call.from_user
     current_name = user.full_name or ""
 
+    # 1. Cek Simbol CN
     if REQUIRED_CN_SYMBOL not in current_name:
         await call.answer(f"Simbol {REQUIRED_CN_SYMBOL} belum terdeteksi di nama Telegram kamu!", show_alert=True)
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -239,6 +269,31 @@ async def cb_enter_bar(call: types.CallbackQuery, state: FSMContext):
             kb,
         )
 
+    # 2. Cek Wajib Join CH_INFO_ID & CH_PROMOTE_ID
+    missing_channels = await _check_required_channels(user.id)
+    if missing_channels:
+        await call.answer("Kamu wajib bergabung ke seluruh Channel Bar terlebih dahulu!", show_alert=True)
+        btn_rows = []
+        missing_lines = []
+        for label, link in missing_channels:
+            missing_lines.append(f"• <b>{html.escape(label)}</b>")
+            if link and link.startswith("https://") and link != "https://t.me/":
+                btn_rows.append([styled_btn(f"📢 Gabung {label}", url=link, style="primary")])
+
+        btn_rows.append([styled_btn("🔄 Saya Sudah Bergabung, Cek Ulang", callback_data="enter_bar", style="success")])
+        btn_rows.append([styled_btn("🏠 Kembali ke Lobi Utama", callback_data="back_lobby")])
+
+        return await _send_or_edit_lobby(
+            call,
+            "📢 <b>WAJIB BERGABUNG KE CHANNEL RESMI BAR</b>\n\n"
+            f"✅ Atribut CN <code>{html.escape(current_name)}</code> sudah terpasang.\n"
+            "<i>Sebelum Hans membukakan pintu utama, pastikan kamu sudah bergabung ke channel resmi berikut:</i>\n\n"
+            f"{chr(10).join(missing_lines)}\n\n"
+            "<i>Silakan tekan tombol channel di bawah ini untuk bergabung, lalu tekan <b>Cek Ulang</b>:</i>",
+            InlineKeyboardMarkup(inline_keyboard=btn_rows),
+        )
+
+    # 3. Cek Kata Sandi Pintu jika diaktifkan Owner
     door_pw = await get_bar_setting("door_password")
     if door_pw and user.id != OWNER_ID:
         await call.answer()
@@ -249,12 +304,12 @@ async def cb_enter_bar(call: types.CallbackQuery, state: FSMContext):
         return await _send_or_edit_lobby(
             call,
             "🔐 <b>KATA SANDI PINTU LOUNGE DIPERLUKAN</b>\n\n"
-            f"✅ Atribut CN <code>{html.escape(current_name)}</code> terverifikasi.\n"
+            f"✅ Atribut CN <code>{html.escape(current_name)}</code> & Keanggotaan Channel terverifikasi.\n"
             "<i>Namun malam ini pintu ruang lounge dikunci dengan kata sandi khusus. Silakan ketik kata sandi masuk sekarang:</i>",
             kb,
         )
 
-    await call.answer("Verifikasi CN berhasil!")
+    await call.answer("Verifikasi lengkap berhasil!")
     await _grant_bar_entry(user, call.message, edit=(not call.message.photo))
 
 
