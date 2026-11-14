@@ -14,11 +14,13 @@ import shared.database as db
 from shared.config import OWNER_ID
 from hans_concierge.helpers import (
     bot, ensure_hans_schema, is_staff_or_owner, resolve_target_user,
-    log_wallet_tx, get_bar_setting, set_bar_setting, styled_btn
+    get_bar_setting, set_bar_setting, styled_btn
 )
 from hans_concierge.gate_wallet import router as gate_wallet_router
 from hans_concierge.shop_gift import router as shop_gift_router
 from hans_concierge.confess_pm import router as confess_pm_router
+from hans_concierge.inline_mode import router as inline_mode_router
+from hans_concierge.webapp_server import start_webapp_server
 
 logging.basicConfig(level=logging.INFO)
 
@@ -26,6 +28,7 @@ dp = Dispatcher(storage=MemoryStorage())
 dp.include_router(gate_wallet_router)
 dp.include_router(shop_gift_router)
 dp.include_router(confess_pm_router)
+dp.include_router(inline_mode_router)
 
 
 class AdminActionState(StatesGroup):
@@ -114,7 +117,6 @@ async def _build_admin_dashboard(user_id: int) -> tuple[str, InlineKeyboardMarku
     return text, InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-# --- ENTRY POINT PANEL ADMIN/OWNER (TOMBOL & /admin) ---
 @dp.callback_query(F.data == "open_admin_panel")
 async def cb_open_admin_panel(call: types.CallbackQuery, state: FSMContext):
     await state.clear()
@@ -174,7 +176,6 @@ async def cb_adm_list_overview(call: types.CallbackQuery):
     )
 
 
-# --- INTERAKTIF: PASSWORD PINTU BAR ---
 @dp.callback_query(F.data == "adm_setpw")
 async def cb_adm_setpw(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id != OWNER_ID:
@@ -254,7 +255,6 @@ async def cmd_delpw(message: types.Message):
     await message.answer("🔓 <b>Password pintu masuk bar dimatikan.</b> Tamu dengan simbol CN dapat langsung masuk.", parse_mode=ParseMode.HTML)
 
 
-# --- INTERAKTIF & VALIDASI LIVE: ATUR CHANNEL CONFESS & PM ---
 async def _apply_and_verify_channel(raw_ch: str) -> str:
     ch_val = raw_ch.strip()
     target = int(ch_val) if ch_val.lstrip("-").isdigit() else ch_val
@@ -329,7 +329,6 @@ async def cmd_setch(message: types.Message):
     await message.answer(res, parse_mode=ParseMode.HTML)
 
 
-# --- INTERAKTIF & SLASH: SUNTIK SALDO VC (/givevc) ---
 async def _execute_givevc(target_ident: str, amount: int) -> str:
     async with db.pool.acquire() as conn:
         user = await resolve_target_user(conn, target_ident)
@@ -340,7 +339,10 @@ async def _execute_givevc(target_ident: str, amount: int) -> str:
             )
         new_coins = (user["coins"] or 0) + amount
         await conn.execute("UPDATE users SET coins = $1 WHERE user_id = $2", new_coins, user["user_id"])
-        await log_wallet_tx(conn, user["user_id"], amount, "Penyesuaian saldo eksklusif oleh Owner")
+        await conn.execute(
+            "INSERT INTO wallet_transactions (user_id, amount, reason, created_at) VALUES ($1, $2, $3, NOW())",
+            user["user_id"], amount, "Penyesuaian saldo eksklusif oleh Owner"
+        )
 
     try:
         sign_txt = f"+{amount}" if amount > 0 else str(amount)
@@ -410,7 +412,6 @@ async def cmd_givevc(message: types.Message):
     await message.answer(res, parse_mode=ParseMode.HTML)
 
 
-# --- INTERAKTIF & SLASH: LAPAK PARTNER (/addshop & /delshop) ---
 async def _execute_addshop(target_ident: str, shop_name: str) -> str:
     async with db.pool.acquire() as conn:
         user = await resolve_target_user(conn, target_ident)
@@ -545,7 +546,6 @@ async def cmd_delshop(message: types.Message):
         await message.answer(f"⚠️ Lapak ID <code>{shop_id}</code> tidak ditemukan.", parse_mode=ParseMode.HTML)
 
 
-# --- INTERAKTIF & SLASH: KELOLA STAF ADMIN (/addadmin & /deladmin) ---
 async def _set_admin_role(target_ident: str, make_admin: bool) -> str:
     async with db.pool.acquire() as conn:
         user = await resolve_target_user(conn, target_ident)
@@ -762,6 +762,7 @@ async def main():
     await db.init_db()
     await ensure_hans_schema()
     await register_hans_commands()
+    await start_webapp_server()
     await dp.start_polling(bot)
 
 
