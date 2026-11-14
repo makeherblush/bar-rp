@@ -8,6 +8,10 @@ TOKEN_HANS = os.getenv("TOKEN_HANS", "")
 TOKEN_JULIAN = os.getenv("TOKEN_JULIAN", "")
 TOKEN_KAELEN = os.getenv("TOKEN_KAELEN", "")
 
+# --- KONFIGURASI WEB APP / MINI APP ---
+MINIAPP_MENU_URL = os.getenv("MINIAPP_MENU_URL", "").strip()
+WEBAPP_URL = (os.getenv("WEBAPP_URL", "") or MINIAPP_MENU_URL).strip()
+
 # --- KONFIGURASI OWNER & LOKASI GRUP / CHANNEL ---
 OWNER_ID = int(os.getenv("OWNER_ID", 0))
 OWNER_USERNAME = os.getenv("OWNER_USERNAME", "").lstrip("@")
