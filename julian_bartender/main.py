@@ -15,7 +15,6 @@ from aiogram.types import (
 )
 
 import shared.database as db
-import shared.config as cfg
 from julian_bartender.helpers import (
     bot,
     GROUP_ID,
@@ -40,15 +39,6 @@ except Exception as e:
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("julian_bartender")
-
-MINIAPP_URL = (
-    os.environ.get("MINIAPP_MENU_URL")
-    or getattr(cfg, "MINIAPP_MENU_URL", None)
-    or os.environ.get("WEBAPP_DIRECT_URL")
-    or os.environ.get("WEBAPP_URL")
-    or WEBAPP_DIRECT_URL
-    or ""
-).strip()
 
 dp = Dispatcher(storage=MemoryStorage())
 dp.include_router(vip_booth_router)
@@ -171,19 +161,19 @@ async def register_julian_commands():
 
     await bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
 
-    if MINIAPP_URL.startswith("https://") and not MINIAPP_URL.startswith("https://t.me/"):
+    if WEBAPP_DIRECT_URL.startswith("https://") and not WEBAPP_DIRECT_URL.startswith("https://t.me/"):
         try:
             await bot.set_chat_menu_button(
                 menu_button=MenuButtonWebApp(
                     text="🍸 Menu",
-                    web_app=WebAppInfo(url=MINIAPP_URL),
+                    web_app=WebAppInfo(url=WEBAPP_DIRECT_URL),
                 )
             )
-            logger.info("MenuButtonWebApp terpasang ke: %s", MINIAPP_URL)
+            logger.info("MenuButtonWebApp terpasang ke: %s", WEBAPP_DIRECT_URL)
         except Exception as e:
             logger.warning("Gagal pasang MenuButtonWebApp: %s", e)
     else:
-        logger.warning("MINIAPP_MENU_URL belum valid untuk Mini App: %s", MINIAPP_URL)
+        logger.warning("MINIAPP_MENU_URL di Railway harus berupa URL https:// domain Railway, saat ini: %s", WEBAPP_DIRECT_URL)
 
 
 async def main():
@@ -193,8 +183,7 @@ async def main():
     if start_webapp_server is not None:
         try:
             await start_webapp_server()
-            port = os.environ.get("PORT", "8080")
-            logger.info("Web App server aktif di 0.0.0.0:%s", port)
+            logger.info("Web App server aktif di 0.0.0.0:%s", os.environ.get("PORT", "8080"))
         except Exception as e:
             logger.exception("Gagal menjalankan Web App server: %s", e)
 
