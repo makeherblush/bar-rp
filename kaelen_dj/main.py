@@ -32,6 +32,8 @@ GROUP_ID = int(cfg.GROUP_ID)
 OWNER_ID = int(cfg.OWNER_ID)
 SONG_REQUEST_COST = 10
 AUTO_DELETE_DELAY = 45
+OS_MUTE_SWEEP_INTERVAL = 10
+OS_IDLE_TIMEOUT = 300  # 5 menit tanpa lagu -> tutup OS otomatis
 CACHE_DIR = "/tmp/kaelen_cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -74,6 +76,7 @@ class TrackItem:
 music_queue: deque[TrackItem] = deque()
 current_track: TrackItem | None = None
 is_paused: bool = False
+_idle_since: float | None = None
 _bg_tasks: set[asyncio.Task] = set()
 _assistant_user_id: int = 0
 _privileged_cache: set[int] = {OWNER_ID}
@@ -282,6 +285,73 @@ async def _mute_all_non_admins(call):
                 )
     except Exception as e:
         logger.debug("Mute sweep skip: %s", e)
+
+
+async def _close_voice_chat_if_idle(call) -> bool:
+    """Tutup OS secara otomatis jika tidak ada lagu diputar selama OS_IDLE_TIMEOUT detik."""
+    global _idle_since
+    if not call:
+        _idle_since = None
+        return False
+
+    if current_track is not None or music_queue:
+        _idle_since = None
+        return False
+
+    now = time.monotonic()
+    if _idle_since is None:
+        _idle_since = now
+        return False
+
+    if (now - _idle_since) < OS_IDLE_TIMEOUT:
+        return False
+
+    try:
+        try:
+            await call_py.leave_call(GROUP_ID)
+        except Exception:
+            pass
+        await assistant.invoke(functions.phone.DiscardGroupCall(call=call))
+        _idle_since = None
+        logger.info("OS ditutup otomatis karena idle selama %s detik.", OS_IDLE_TIMEOUT)
+        await _send_kaelen_msg(
+            "🕯️ <i>Tidak ada lagu yang diputar selama 5 menit — Kaelen menutup Obrolan Suara untuk sementara waktu.</i>",
+            auto_delete=30,
+        )
+        return True
+    except Exception as e:
+        logger.warning("Gagal menutup OS otomatis saat idle: %s", e)
+        return False
+
+
+async def _periodic_os_mute_enforcer():
+    """Background task: setiap 10 detik pastikan peserta non-admin muted & tutup OS jika idle 5 menit."""
+    await asyncio.sleep(5)
+    while True:
+        try:
+            if assistant:
+                peer = await assistant.resolve_peer(GROUP_ID)
+                full = await assistant.invoke(functions.channels.GetFullChannel(channel=peer))
+                call = getattr(full.full_chat, "call", None)
+                if call:
+                    closed = await _close_voice_chat_if_idle(call)
+                    if not closed:
+                        try:
+                            await assistant.invoke(
+                                functions.phone.ToggleGroupCallSettings(
+                                    call=call,
+                                    join_muted=True,
+                                )
+                            )
+                        except Exception:
+                            pass
+                        await _mute_all_non_admins(call)
+                else:
+                    _idle_since = None
+        except Exception as e:
+            logger.debug("Periodic OS sweep error: %s", e)
+
+        await asyncio.sleep(OS_MUTE_SWEEP_INTERVAL)
 
 
 async def _ensure_voice_chat_open_and_muted():
@@ -536,7 +606,7 @@ async def _mark_db_song_status(req_id: int | None, status: str):
 
 
 async def _play_next_in_queue():
-    global current_track, is_paused
+    global current_track, is_paused, _idle_since
     async with _play_lock:
         if current_track and current_track.db_req_id:
             await _mark_db_song_status(current_track.db_req_id, "done")
@@ -544,6 +614,7 @@ async def _play_next_in_queue():
         if not music_queue:
             current_track = None
             is_paused = False
+            _idle_since = time.monotonic()
             try:
                 await call_py.leave_call(GROUP_ID)
             except Exception:
@@ -553,6 +624,7 @@ async def _play_next_in_queue():
         next_track = music_queue.popleft()
         current_track = next_track
         is_paused = False
+        _idle_since = None
 
         if next_track.db_req_id:
             await _mark_db_song_status(next_track.db_req_id, "playing")
@@ -590,6 +662,7 @@ async def _play_next_in_queue():
                 auto_delete=30,
             )
             current_track = None
+            _idle_since = time.monotonic()
             if music_queue:
                 _spawn_task(_play_next_in_queue())
 
@@ -608,7 +681,7 @@ async def enqueue_song_request(
     db_req_id: int | None = None,
     announce_queue: bool = True,
 ) -> bool:
-    global current_track, is_paused
+    global current_track, is_paused, _idle_since
 
     info = await resolve_audio_track(query)
     if not info:
@@ -638,6 +711,7 @@ async def enqueue_song_request(
         current_track = None
         is_paused = False
 
+    _idle_since = None
     music_queue.append(track)
 
     if current_track is None:
@@ -849,7 +923,7 @@ async def cmd_resume_song(message: types.Message):
 
 @dp.message(Command("stop"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_stop_music(message: types.Message):
-    global current_track, is_paused
+    global current_track, is_paused, _idle_since
     uid = message.from_user.id
     if uid != OWNER_ID:
         member = await bot.get_chat_member(message.chat.id, uid)
@@ -863,6 +937,7 @@ async def cmd_stop_music(message: types.Message):
         await _mark_db_song_status(current_track.db_req_id, "stopped")
     current_track = None
     is_paused = False
+    _idle_since = time.monotonic()
 
     try:
         await call_py.leave_call(GROUP_ID)
@@ -897,10 +972,11 @@ async def register_kaelen_commands():
 
 
 async def main():
-    global assistant, call_py, _play_lock, _tg_bot_lock, _assistant_user_id
+    global assistant, call_py, _play_lock, _tg_bot_lock, _assistant_user_id, _idle_since
 
     _play_lock = asyncio.Lock()
     _tg_bot_lock = asyncio.Lock()
+    _idle_since = time.monotonic()
 
     await db.init_db()
     await ensure_kaelen_schema()
@@ -930,6 +1006,7 @@ async def main():
     )
 
     _spawn_task(_poll_webapp_song_queue())
+    _spawn_task(_periodic_os_mute_enforcer())
     await dp.start_polling(bot)
 
 
