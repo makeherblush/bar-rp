@@ -45,21 +45,18 @@ def _get_music_vault_id() -> int | str | None:
 
 
 MUSIC_VAULT_ID = _get_music_vault_id()
-
-bot = Bot(token=cfg.TOKEN_KAELEN)
-dp = Dispatcher(storage=MemoryStorage())
-
 SESSION_STRING = getattr(cfg, "SESSION_STRING", None) or os.environ.get("SESSION_STRING")
 API_ID = int(getattr(cfg, "API_ID", 0) or os.environ.get("API_ID", 0))
 API_HASH = str(getattr(cfg, "API_HASH", "") or os.environ.get("API_HASH", ""))
 
-assistant = Client(
-    name="kaelen_assistant",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    session_string=SESSION_STRING,
-)
-call_py = PyTgCalls(assistant)
+bot = Bot(token=cfg.TOKEN_KAELEN)
+dp = Dispatcher(storage=MemoryStorage())
+
+# Diinisialisasi di dalam main() agar terikat ke event loop yang sama dengan aiogram
+assistant: Client | None = None
+call_py: PyTgCalls | None = None
+_play_lock: asyncio.Lock | None = None
+_tg_bot_lock: asyncio.Lock | None = None
 
 
 @dataclass
@@ -78,8 +75,6 @@ class TrackItem:
 music_queue: deque[TrackItem] = deque()
 current_track: TrackItem | None = None
 is_paused: bool = False
-_play_lock = asyncio.Lock()
-_tg_bot_lock = asyncio.Lock()
 _bg_tasks: set[asyncio.Task] = set()
 _assistant_user_id: int = 0
 
@@ -266,7 +261,6 @@ async def _unmute_assistant_in_call(call):
         pass
 
 
-@assistant.on_raw_update()
 async def _enforce_os_listener_mute(client: Client, update, users, chats):
     if not isinstance(update, raw_types.UpdateGroupCallParticipants):
         return
@@ -439,17 +433,14 @@ def _search_jiosaavn_sync(query: str) -> dict | None:
 
 
 async def resolve_audio_track(query: str) -> dict | None:
-    # 1. Cek MUSIC_VAULT_ID terlebih dahulu
     vault_res = await _search_music_vault(query)
     if vault_res:
         return vault_res
 
-    # 2. Ambil lewat bot musik Telegram & arsipkan ke MUSIC_VAULT_ID
     tg_bot_res = await _fetch_via_tg_music_bot(query)
     if tg_bot_res:
         return tg_bot_res
 
-    # 3. Cadangan streaming
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _search_jiosaavn_sync, query)
 
@@ -522,7 +513,6 @@ async def _play_next_in_queue():
                 _spawn_task(_play_next_in_queue())
 
 
-@call_py.on_update()
 async def on_tgcalls_update(_, update):
     update_name = type(update).__name__
     if "StreamEnded" in update_name or "StreamAudioEnded" in update_name:
@@ -575,7 +565,6 @@ async def enqueue_song_request(
     return True
 
 
-# --- SINKRONISASI ANTREAN LAGU DARI MINI APP (WEBAPP) ---
 async def _poll_webapp_song_queue():
     await asyncio.sleep(3)
     while True:
@@ -819,10 +808,26 @@ async def register_kaelen_commands():
 
 
 async def main():
-    global _assistant_user_id
+    global assistant, call_py, _play_lock, _tg_bot_lock, _assistant_user_id
+
+    _play_lock = asyncio.Lock()
+    _tg_bot_lock = asyncio.Lock()
+
     await db.init_db()
     await ensure_kaelen_schema()
     await register_kaelen_commands()
+
+    # Inisialisasi Pyrogram & PyTgCalls di dalam event loop aktif
+    assistant = Client(
+        name="kaelen_assistant",
+        api_id=API_ID,
+        api_hash=API_HASH,
+        session_string=SESSION_STRING,
+    )
+    assistant.on_raw_update()(_enforce_os_listener_mute)
+
+    call_py = PyTgCalls(assistant)
+    call_py.on_update()(on_tgcalls_update)
 
     await assistant.start()
     me = await assistant.get_me()
