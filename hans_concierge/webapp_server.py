@@ -30,132 +30,546 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>The Velvet Hour — Menu, Mixology & Lounge</title>
+  <title>The Velvet Hour — Member Pass & Lounge</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     :root {
-      --bg: #100b0f;
-      --card: #1b1319;
-      --gold: #dfb866;
-      --gold-dim: rgba(223, 184, 102, 0.28);
-      --cream: #f5efe6;
-      --muted: #a69c95;
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-    html, body { background-color: #100b0f !important; color: #f5efe6 !important; padding-bottom: 90px; min-height: 100vh; }
-
-    header {
-      background: linear-gradient(180deg, #2b121b 0%, #100b0f 100%);
-      padding: 16px 16px 10px;
-      border-bottom: 1px solid var(--gold-dim);
-      position: sticky; top: 0; z-index: 10;
-    }
-    .brand { font-size: 10px; letter-spacing: 2px; color: var(--gold); font-weight: 700; }
-    .title-row { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
-    h1 { font-size: 19px; font-weight: 700; color: #f5efe6; }
-    .badge-vc {
-      background: rgba(223, 184, 102, 0.16);
-      border: 1px solid var(--gold);
-      color: var(--gold);
-      padding: 4px 10px;
-      border-radius: 20px;
-      font-size: 12px;
-      font-weight: 700;
+      --bg-base: #0a0608;
+      --glass-bg: rgba(28, 17, 23, 0.56);
+      --glass-strong: rgba(36, 21, 29, 0.74);
+      --glass-border: rgba(226, 188, 108, 0.28);
+      --glass-highlight: rgba(255, 255, 255, 0.08);
+      --gold: #e2bc6c;
+      --gold-soft: rgba(226, 188, 108, 0.16);
+      --cream: #f7f1e8;
+      --muted: #b0a39c;
     }
 
-    .tabs {
-      display: flex; gap: 6px; padding: 10px 12px; overflow-x: auto;
-      background: #100b0f; position: sticky; top: 64px; z-index: 9;
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+      -webkit-tap-highlight-color: transparent;
     }
-    .tabs::-webkit-scrollbar { display: none; }
-    .tab {
-      flex: 0 0 auto; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--gold-dim);
-      background: var(--card); color: var(--muted); font-size: 12px; font-weight: 600;
+
+    html, body {
+      min-height: 100vh;
+      background-color: var(--bg-base) !important;
+      background-image:
+        radial-gradient(circle at 15% 10%, rgba(122, 24, 52, 0.42) 0%, transparent 48%),
+        radial-gradient(circle at 88% 28%, rgba(196, 148, 62, 0.22) 0%, transparent 45%),
+        radial-gradient(circle at 50% 90%, rgba(84, 18, 38, 0.35) 0%, transparent 55%);
+      background-attachment: fixed;
+      color: var(--cream) !important;
+      padding: 14px 14px 104px;
+      overflow-x: hidden;
+    }
+
+    /* === 3D FLIP ENGINE === */
+    .flip-scene {
+      perspective: 1200px;
+      width: 100%;
+    }
+    .flip-card {
+      position: relative;
+      width: 100%;
+      transform-style: preserve-3d;
+      -webkit-transform-style: preserve-3d;
+      transition: transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
       cursor: pointer;
     }
-    .tab.active {
-      background: linear-gradient(135deg, #4b1725, #29141d);
-      border-color: var(--gold); color: var(--gold);
+    .flip-card.is-flipped {
+      transform: rotateY(180deg);
+    }
+    .flip-face {
+      position: relative;
+      width: 100%;
+      backface-visibility: hidden;
+      -webkit-backface-visibility: hidden;
+      background: var(--glass-bg);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--glass-border);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), inset 0 1px 0 var(--glass-highlight);
+    }
+    .flip-back {
+      position: absolute;
+      inset: 0;
+      transform: rotateY(180deg);
+      background: var(--glass-strong);
+    }
+    .flip-card:not(.is-flipped) .flip-back { pointer-events: none; }
+    .flip-card.is-flipped .flip-front { pointer-events: none; }
+
+    /* === MEMBER PASS HEADER CARD === */
+    .member-scene {
+      margin-bottom: 16px;
+    }
+    .member-face {
+      border-radius: 22px;
+      padding: 16px 18px;
+      min-height: 168px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
+    }
+    .member-face::before {
+      content: "";
+      position: absolute;
+      top: -40%;
+      right: -20%;
+      width: 180px;
+      height: 180px;
+      background: radial-gradient(circle, rgba(226, 188, 108, 0.22), transparent 70%);
+      pointer-events: none;
     }
 
-    .section { display: none; padding: 4px 16px; }
-    .section.active { display: block; }
-    .sub-title {
-      font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px;
-      color: var(--gold); margin: 14px 0 8px; font-weight: 700;
+    .card-top-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 10px;
+      letter-spacing: 1.8px;
+      color: var(--gold);
+      font-weight: 700;
+    }
+    .flip-hint {
+      font-size: 10px;
+      letter-spacing: 0.4px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.06);
+      padding: 3px 8px;
+      border-radius: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
     }
 
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    .item-card {
-      background: var(--card); border: 1px solid var(--gold-dim);
-      border-radius: 14px; padding: 12px; display: flex; flex-direction: column;
+    .profile-row {
+      display: flex;
+      align-items: center;
+      gap: 13px;
+      margin: 12px 0;
+    }
+    .avatar-wrap {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      padding: 2px;
+      background: linear-gradient(135deg, #f3d58d, #9c7228);
+      flex-shrink: 0;
+      box-shadow: 0 4px 14px rgba(226, 188, 108, 0.25);
+    }
+    .avatar-img, .avatar-fallback {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      object-fit: cover;
+      display: block;
+    }
+    .avatar-fallback {
+      background: #1f1218;
+      color: var(--gold);
+      font-weight: 800;
+      font-size: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .profile-info {
+      min-width: 0;
+      flex: 1;
+    }
+    .profile-name {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--cream);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .profile-usn {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .stats-strip {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .stat-pill {
+      flex: 1;
+      background: rgba(12, 7, 10, 0.55);
+      border: 1px solid rgba(226, 188, 108, 0.2);
+      border-radius: 12px;
+      padding: 7px 10px;
+      display: flex;
+      flex-direction: column;
+    }
+    .stat-label {
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--muted);
+    }
+    .stat-val {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--gold);
+      margin-top: 1px;
+    }
+
+    /* === MEMBER PASS BACK (REFERRAL) === */
+    .ref-box {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(10, 6, 8, 0.65);
+      border: 1px dashed var(--gold);
+      border-radius: 12px;
+      padding: 8px 12px;
+      margin: 8px 0;
+    }
+    .ref-code-text {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      color: var(--gold);
+    }
+    .btn-copy-ref {
+      background: var(--gold);
+      color: #140d09;
+      border: none;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 11px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .ref-claim-row {
+      display: flex;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .ref-input {
+      flex: 1;
+      background: rgba(10, 6, 8, 0.65);
+      border: 1px solid var(--glass-border);
+      color: var(--cream);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 11px;
+      outline: none;
+      text-transform: uppercase;
+    }
+    .btn-claim-ref {
+      background: rgba(226, 188, 108, 0.2);
+      border: 1px solid var(--gold);
+      color: var(--gold);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    /* === SECTIONS & GRID === */
+    .section { display: none; }
+    .section.active { display: block; animation: fadeIn 0.25s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+    .sec-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 12px 2px 10px;
+    }
+    .sec-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1.6px;
+      color: var(--gold);
+      font-weight: 700;
+    }
+    .sec-sub {
+      font-size: 10px;
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 11px;
+    }
+
+    /* === FLIP MENU / LAPAK CARDS === */
+    .item-card-inner {
+      height: 146px;
+    }
+    .item-face {
+      height: 100%;
+      border-radius: 18px;
+      padding: 13px;
+      display: flex;
+      flex-direction: column;
       justify-content: space-between;
     }
-    .item-card.vip { border-color: rgba(223, 184, 102, 0.65); background: linear-gradient(160deg, #241914, #181116); }
-    .item-emoji { font-size: 24px; margin-bottom: 6px; }
-    .item-name { font-size: 13px; font-weight: 700; margin-bottom: 3px; color: #f5efe6; }
-    .item-desc { font-size: 11px; color: var(--muted); line-height: 1.35; margin-bottom: 10px; }
-    .item-footer { display: flex; justify-content: space-between; align-items: center; }
-    .price { font-size: 11px; font-weight: 700; color: var(--gold); }
-
-    .btn-order {
-      background: var(--gold); color: #140f0b; border: none; border-radius: 8px;
-      padding: 6px 11px; font-size: 11px; font-weight: 700; cursor: pointer;
+    .item-face.vip-glow {
+      border-color: rgba(226, 188, 108, 0.62);
+      background: linear-gradient(155deg, rgba(52, 32, 22, 0.68), rgba(24, 14, 19, 0.64));
+    }
+    .item-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+    .item-emoji {
+      font-size: 28px;
+      filter: drop-shadow(0 4px 10px rgba(0,0,0,0.4));
+    }
+    .price-pill {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--gold);
+      background: var(--gold-soft);
+      border: 1px solid rgba(226, 188, 108, 0.35);
+      padding: 3px 8px;
+      border-radius: 20px;
+    }
+    .item-name {
+      font-size: 13.5px;
+      font-weight: 700;
+      color: var(--cream);
+      line-height: 1.25;
+    }
+    .item-tap-label {
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 3px;
     }
 
-    .box-panel {
-      background: var(--card); border: 1px solid var(--gold-dim);
-      border-radius: 14px; padding: 14px; margin-top: 10px;
+    .item-desc-back {
+      font-size: 11.5px;
+      color: var(--cream);
+      line-height: 1.4;
+      opacity: 0.92;
     }
-    label { display: block; font-size: 12px; color: var(--gold); font-weight: 600; margin: 10px 0 6px; }
-    select, .input-field {
-      width: 100%; background: #100b0f; border: 1px solid var(--gold-dim);
-      color: #f5efe6; padding: 11px; border-radius: 10px; font-size: 13px;
+    .btn-order-glass {
+      width: 100%;
+      background: linear-gradient(135deg, #e6c375, #b88a35);
+      color: #140d09;
+      border: none;
+      border-radius: 10px;
+      padding: 8px;
+      font-size: 11.5px;
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(226, 188, 108, 0.25);
+    }
+
+    /* === GLASS PANEL (MIXOLOGY & JUKEBOX) === */
+    .glass-panel {
+      background: var(--glass-bg);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--glass-border);
+      border-radius: 20px;
+      padding: 16px;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+    }
+    .panel-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--gold);
+    }
+    .panel-desc {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+      line-height: 1.4;
+    }
+    label {
+      display: block;
+      font-size: 11px;
+      color: var(--gold);
+      font-weight: 600;
+      margin: 12px 0 5px;
+      letter-spacing: 0.5px;
+    }
+    select, .glass-input {
+      width: 100%;
+      background: rgba(12, 7, 10, 0.65);
+      border: 1px solid var(--glass-border);
+      color: var(--cream);
+      padding: 11px 12px;
+      border-radius: 12px;
+      font-size: 13px;
       outline: none;
     }
-    .btn-full {
-      width: 100%; background: linear-gradient(135deg, #dfb866, #b88c38);
-      color: #140f0b; border: none; padding: 12px; border-radius: 10px;
-      font-size: 13px; font-weight: 800; cursor: pointer; margin-top: 14px;
+    .btn-primary-full {
+      width: 100%;
+      background: linear-gradient(135deg, #e6c375, #b88a35);
+      color: #140d09;
+      border: none;
+      padding: 13px;
+      border-radius: 12px;
+      font-size: 13px;
+      font-weight: 800;
+      cursor: pointer;
+      margin-top: 15px;
+      box-shadow: 0 6px 18px rgba(226, 188, 108, 0.25);
     }
 
+    /* === FLOATING GLASS DOCK === */
+    .glass-dock {
+      position: fixed;
+      bottom: 14px;
+      left: 14px;
+      right: 14px;
+      background: rgba(24, 14, 19, 0.78);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border: 1px solid var(--glass-border);
+      border-radius: 24px;
+      padding: 6px;
+      display: flex;
+      justify-content: space-between;
+      gap: 4px;
+      z-index: 50;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.75), inset 0 1px 0 var(--glass-highlight);
+    }
+    .dock-item {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 7px 4px;
+      border-radius: 18px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .dock-icon {
+      font-size: 17px;
+      margin-bottom: 2px;
+    }
+    .dock-item.active {
+      background: linear-gradient(135deg, rgba(226, 188, 108, 0.24), rgba(122, 24, 52, 0.38));
+      color: var(--gold);
+      border: 1px solid rgba(226, 188, 108, 0.35);
+    }
+
+    /* === GLASS TOAST === */
     .toast {
-      position: fixed; bottom: 20px; left: 16px; right: 16px;
-      background: #23181e; border: 1px solid var(--gold); color: #f5efe6;
-      padding: 12px 14px; border-radius: 12px; font-size: 13px; text-align: center;
-      display: none; z-index: 99; box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      right: 16px;
+      background: rgba(28, 17, 23, 0.9);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      border: 1px solid var(--gold);
+      color: var(--cream);
+      padding: 12px 16px;
+      border-radius: 14px;
+      font-size: 12.5px;
+      font-weight: 600;
+      text-align: center;
+      display: none;
+      z-index: 99;
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.65);
     }
   </style>
 </head>
 <body>
-  <header>
-    <div class="brand">THE VELVET HOUR  •  LOUNGE CONCIERGE</div>
-    <div class="title-row">
-      <h1 id="guest-name">Selamat Malam</h1>
-      <div class="badge-vc" id="guest-balance">50 VC</div>
-    </div>
-  </header>
 
-  <div class="tabs">
-    <div class="tab active" onclick="switchTab('drinks', this)">🍸 Minuman</div>
-    <div class="tab" onclick="switchTab('mixology', this)">🧪 Racik Koktail</div>
-    <div class="tab" onclick="switchTab('food', this)">🍽️ Hidangan</div>
-    <div class="tab" onclick="switchTab('lapak', this)">🏪 Lapak</div>
-    <div class="tab" onclick="switchTab('music', this)">🎶 Jukebox</div>
+  <!-- === 3D FLIP MEMBER PASS CARD === -->
+  <div class="flip-scene member-scene">
+    <div class="flip-card" id="member-flip-card" onclick="toggleMemberCard(event)">
+      <!-- SISI DEPAN: PP, NAMA, USERNAME, SALDO, CHARM, STATUS -->
+      <div class="flip-face member-face flip-front">
+        <div class="card-top-meta">
+          <span>THE VELVET HOUR  •  PASS</span>
+          <span class="flip-hint">Referral ↻</span>
+        </div>
+
+        <div class="profile-row">
+          <div class="avatar-wrap" id="avatar-container">
+            <div class="avatar-fallback" id="avatar-initial">V</div>
+          </div>
+          <div class="profile-info">
+            <div class="profile-name" id="guest-name">Tamu Lounge</div>
+            <div class="profile-usn" id="guest-usn">@velvetguest</div>
+          </div>
+        </div>
+
+        <div class="stats-strip">
+          <div class="stat-pill">
+            <span class="stat-label">Saldo</span>
+            <span class="stat-val" id="guest-balance">50 VC</span>
+          </div>
+          <div class="stat-pill">
+            <span class="stat-label">Charm</span>
+            <span class="stat-val" id="guest-charm">0 ✨</span>
+          </div>
+          <div class="stat-pill">
+            <span class="stat-label">Tier</span>
+            <span class="stat-val" id="guest-tier">GUEST</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- SISI BELAKANG: KODE REFERRAL & KLAIM -->
+      <div class="flip-face member-face flip-back">
+        <div class="card-top-meta">
+          <span>INVITE & REWARDS (+25 VC)</span>
+          <span class="flip-hint">Profil ↻</span>
+        </div>
+
+        <div class="ref-box" onclick="event.stopPropagation()">
+          <div>
+            <div style="font-size: 9px; color: var(--muted); letter-spacing: 0.8px;">KODE REFERRAL KAMU (<span id="ref-count">0</span> Teman)</div>
+            <div class="ref-code-text" id="my-ref-code">VH-00000</div>
+          </div>
+          <button class="btn-copy-ref" onclick="copyReferral(event)">Salin</button>
+        </div>
+
+        <div id="claim-area" class="ref-claim-row" onclick="event.stopPropagation()">
+          <input type="text" id="input-ref-code" class="ref-input" placeholder="Punya kode teman? Masukkan..." maxlength="16" />
+          <button class="btn-claim-ref" onclick="claimReferral(event)">Klaim</button>
+        </div>
+      </div>
+    </div>
   </div>
 
+  <!-- === TAB 1: MINUMAN === -->
   <div id="tab-drinks" class="section active">
-    <div class="sub-title">Signature & Classic Drinks (Gratis)</div>
+    <div class="sec-header">
+      <span class="sec-title">Signature Drinks</span>
+      <span class="sec-sub">Tap kartu untuk detail</span>
+    </div>
     <div class="grid" id="grid-drinks-reg"></div>
-    <div class="sub-title">✨ VIP Reserve Cellar (Gratis VIP / 15 VC)</div>
+
+    <div class="sec-header" style="margin-top: 18px;">
+      <span class="sec-title">👑 VIP Reserve Cellar</span>
+      <span class="sec-sub">Gratis VIP / 15 VC</span>
+    </div>
     <div class="grid" id="grid-drinks-vip"></div>
   </div>
 
+  <!-- === TAB 2: MIXOLOGY === -->
   <div id="tab-mixology" class="section">
-    <div class="box-panel">
-      <div style="font-size: 15px; font-weight: 700; color: var(--gold);">🧪 Custom Mixology Bar</div>
-      <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">
-        Pilih bahan racikanmu sendiri—Julian akan mengocoknya langsung di meja bar grup (Biaya: <b>10 VC</b>, Gratis VIP).
+    <div class="glass-panel">
+      <div class="panel-title">🧪 Custom Mixology Bar</div>
+      <div class="panel-desc">
+        Racik komposisi minumanmu sendiri. Julian akan mengocoknya langsung di meja bar grup (<b>10 VC</b>, Gratis VIP).
       </div>
 
       <label>1. Dasar Minuman (Base)</label>
@@ -167,7 +581,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         <option value="Sparkling Non-Alcoholic Tonic">🫧 Sparkling Tonic (Non-Alkohol)</option>
       </select>
 
-      <label>2. Campuran Rasa (Mixer & Syrup)</label>
+      <label>2. Campuran Rasa (Syrup & Bitters)</label>
       <select id="mix-syrup">
         <option value="Blood Orange & Bitters">🍊 Blood Orange & Aromatic Bitters</option>
         <option value="Velvet Rose & Lychee">🌹 Velvet Rose & Lychee Nectar</option>
@@ -177,43 +591,80 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 
       <label>3. Hiasan Gelas (Garnish)</label>
       <select id="mix-garnish">
-        <option value="Kulit Jeruk Bakar">🔥 Kulit Jeruk Bakar (Torched Peel)</option>
+        <option value="Kulit Jeruk Bakar">🔥 Kulit Jeruk Bakar</option>
         <option value="Batang Kayu Manis Asap">🪵 Batang Kayu Manis Asap</option>
         <option value="Kelopak Mawar Merah">🥀 Kelopak Mawar Merah</option>
         <option value="Ceri Hitam Maraschino">🍒 Ceri Hitam Maraschino</option>
       </select>
 
-      <label>4. Beri Nama Koktailmu (Opsional)</label>
-      <input type="text" id="mix-name" class="input-field" placeholder="Contoh: Midnight Crimson" maxlength="32" />
+      <label>4. Nama Koktail (Opsional)</label>
+      <input type="text" id="mix-name" class="glass-input" placeholder="Contoh: Midnight Crimson" maxlength="32" />
 
-      <button class="btn-full" onclick="submitCustomMix()">🍸 Minta Julian Racik Sekarang</button>
+      <button class="btn-primary-full" onclick="submitCustomMix()">🍸 Minta Julian Racik Sekarang</button>
     </div>
   </div>
 
+  <!-- === TAB 3: HIDANGAN === -->
   <div id="tab-food" class="section">
-    <div class="sub-title">Midnight Kitchen (Gratis)</div>
+    <div class="sec-header">
+      <span class="sec-title">Midnight Kitchen</span>
+      <span class="sec-sub">Tap kartu untuk detail</span>
+    </div>
     <div class="grid" id="grid-food-reg"></div>
-    <div class="sub-title">✨ Chef's VIP Gastronomy (Gratis VIP / 15 VC)</div>
+
+    <div class="sec-header" style="margin-top: 18px;">
+      <span class="sec-title">👑 Chef's VIP Gastronomy</span>
+      <span class="sec-sub">Gratis VIP / 15 VC</span>
+    </div>
     <div class="grid" id="grid-food-vip"></div>
   </div>
 
+  <!-- === TAB 4: LAPAK === -->
   <div id="tab-lapak" class="section">
-    <div class="sub-title">🏪 Etalase Item Lapak Partner Aktif</div>
+    <div class="sec-header">
+      <span class="sec-title">🏪 Lapak Partner</span>
+      <span class="sec-sub">Tap kartu untuk beli</span>
+    </div>
     <div class="grid" id="grid-lapak">
       <div style="color: var(--muted); font-size: 12px;">Memuat katalog lapak...</div>
     </div>
   </div>
 
+  <!-- === TAB 5: JUKEBOX === -->
   <div id="tab-music" class="section">
-    <div class="box-panel">
-      <div style="font-size: 15px; font-weight: 700; color: var(--gold);">🎧 Request Lagu ke Kaelen DJ</div>
-      <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">
-        Lagu langsung masuk antrean & diumumkan Kaelen di grup (Biaya: <b>10 VC</b>, Gratis VIP).
+    <div class="glass-panel">
+      <div class="panel-title">🎶 Jukebox Booth — Kaelen DJ</div>
+      <div class="panel-desc">
+        Pilih lagu untuk diputar di ruang utama grup (<b>10 VC</b>, Gratis VIP).
       </div>
-      <input type="text" id="song-input" class="input-field" style="margin-top: 12px;" placeholder="Contoh: Apocalypse - Cigarettes After Sex" />
-      <button class="btn-full" onclick="submitSong()">🎶 Putar di Ruang Utama</button>
+      <input type="text" id="song-input" class="glass-input" style="margin-top: 14px;" placeholder="Contoh: Apocalypse - Cigarettes After Sex" />
+      <button class="btn-primary-full" onclick="submitSong()">🎧 Putar di Ruangan</button>
     </div>
   </div>
+
+  <!-- === FLOATING GLASS DOCK === -->
+  <nav class="glass-dock">
+    <div class="dock-item active" onclick="switchTab('drinks', this)">
+      <span class="dock-icon">🍸</span>
+      <span>Minuman</span>
+    </div>
+    <div class="dock-item" onclick="switchTab('mixology', this)">
+      <span class="dock-icon">🧪</span>
+      <span>Mixology</span>
+    </div>
+    <div class="dock-item" onclick="switchTab('food', this)">
+      <span class="dock-icon">🍽️</span>
+      <span>Hidangan</span>
+    </div>
+    <div class="dock-item" onclick="switchTab('lapak', this)">
+      <span class="dock-icon">🏪</span>
+      <span>Lapak</span>
+    </div>
+    <div class="dock-item" onclick="switchTab('music', this)">
+      <span class="dock-icon">🎶</span>
+      <span>Jukebox</span>
+    </div>
+  </nav>
 
   <div id="toast" class="toast"></div>
 
@@ -222,64 +673,92 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     if (tg) {
       tg.ready();
       tg.expand();
-      if (tg.setHeaderColor) tg.setHeaderColor('#100b0f');
-      if (tg.setBackgroundColor) tg.setBackgroundColor('#100b0f');
+      if (tg.setHeaderColor) tg.setHeaderColor('#0a0608');
+      if (tg.setBackgroundColor) tg.setBackgroundColor('#0a0608');
     }
 
     const MENUS = {
       drinksReg: [
-        { code: "negroni", emoji: "🥃", name: "Classic Negroni", desc: "Gin, Campari & sweet vermouth.", price: 0 },
-        { code: "whisky", emoji: "🧊", name: "Smoked Whisky", desc: "Bourbon dengan es batu kristal.", price: 0 },
-        { code: "mojito", emoji: "🌿", name: "Velvet Mojito", desc: "Daun mint, lime & soda dingin.", price: 0 },
-        { code: "espresso", emoji: "☕", name: "Double Espresso", desc: "Kopi panggang gelap pekat.", price: 0 },
-        { code: "latte", emoji: "🥛", name: "Caramel Latte", desc: "Espresso lembut & karamel.", price: 0 },
-        { code: "mocktail", emoji: "🍹", name: "Crimson Sunset", desc: "Delima, cranberry & tonic segar.", price: 0 },
+        { code: "negroni", emoji: "🥃", name: "Classic Negroni", desc: "Perpaduan Gin, Campari & sweet vermouth dengan kulit jeruk.", price: 0 },
+        { code: "whisky", emoji: "🧊", name: "Smoked Whisky", desc: "Aged Bourbon disajikan di atas es batu kristal bening.", price: 0 },
+        { code: "mojito", emoji: "🌿", name: "Velvet Mojito", desc: "Daun mint segar, perasan lime & soda dingin menyegarkan.", price: 0 },
+        { code: "espresso", emoji: "☕", name: "Double Espresso", desc: "Ekstrak biji kopi panggang gelap beraroma pekat.", price: 0 },
+        { code: "latte", emoji: "🥛", name: "Caramel Latte", desc: "Espresso lembut berpadu susu steamed & sirup karamel.", price: 0 },
+        { code: "mocktail", emoji: "🍹", name: "Crimson Sunset", desc: "Jus delima, cranberry & tonic segar tanpa alkohol.", price: 0 },
       ],
       drinksVip: [
-        { code: "vip_dom", emoji: "🍾", name: "Dom Pérignon Vintage", desc: "Sampanye Prancis eksklusif.", price: 15, vip: true },
-        { code: "vip_blue", emoji: "💎", name: "Blue Label Reserve", desc: "Scotch langka aroma kayu ek.", price: 15, vip: true },
-        { code: "vip_absinthe", emoji: "🧪", name: "Emerald Absinthe", desc: "Gula karamel terbakar.", price: 15, vip: true },
-        { code: "vip_royal", emoji: "👑", name: "Velvet Royal Martini", desc: "Vodka dengan edible gold leaf.", price: 15, vip: true },
+        { code: "vip_dom", emoji: "🍾", name: "Dom Pérignon Vintage", desc: "Sampanye Prancis klasik dengan gelembung halus.", price: 15, vip: true },
+        { code: "vip_blue", emoji: "💎", name: "Blue Label Reserve", desc: "Scotch whisky langka dengan sentuhan kayu ek.", price: 15, vip: true },
+        { code: "vip_absinthe", emoji: "🧪", name: "Emerald Absinthe", desc: "Racikan herbal hijau dengan gula karamel terbakar.", price: 15, vip: true },
+        { code: "vip_royal", emoji: "👑", name: "Velvet Royal Martini", desc: "Dry vodka martini dengan taburan edible gold leaf.", price: 15, vip: true },
       ],
       foodReg: [
-        { code: "steak", emoji: "🥩", name: "Ribeye Steak", desc: "Medium-rare saus lada hitam.", price: 0 },
-        { code: "pasta", emoji: "🍝", name: "Truffle Carbonara", desc: "Spaghetti jamur truffle & keju.", price: 0 },
-        { code: "fries", emoji: "🍟", name: "Truffle Fries", desc: "Kentang renyah tabur parmesan.", price: 0 },
-        { code: "platter", emoji: "🧀", name: "Charcuterie Board", desc: "Keju artisan, buah & crackers.", price: 0 },
-        { code: "tiramisu", emoji: "🍰", name: "Espresso Tiramisu", desc: "Krim mascarpone klasik Italia.", price: 0 },
-        { code: "croissant", emoji: "🥐", name: "Butter Croissant", desc: "Pastry hangat mentega Prancis.", price: 0 },
+        { code: "steak", emoji: "🥩", name: "Ribeye Steak", desc: "Daging panggang medium-rare dengan saus lada hitam.", price: 0 },
+        { code: "pasta", emoji: "🍝", name: "Truffle Carbonara", desc: "Spaghetti al dente dengan krim jamur truffle & parmesan.", price: 0 },
+        { code: "fries", emoji: "🍟", name: "Truffle Fries", desc: "Kentang goreng renyah beraroma minyak truffle.", price: 0 },
+        { code: "platter", emoji: "🧀", name: "Charcuterie Board", desc: "Pilihan keju artisan, buah beri & crackers.", price: 0 },
+        { code: "tiramisu", emoji: "🍰", name: "Espresso Tiramisu", desc: "Lapisan krim mascarpone lembut khas Italia.", price: 0 },
+        { code: "croissant", emoji: "🥐", name: "Butter Croissant", desc: "Pastry berlapis mentega Prancis yang dipanggang hangat.", price: 0 },
       ],
       foodVip: [
-        { code: "vip_a5", emoji: "🥩", name: "Miyazaki Wagyu A5", desc: "Wagyu Jepang lumer di mulut.", price: 15, vip: true },
-        { code: "vip_caviar", emoji: "🥄", name: "Beluga Caviar", desc: "Kaviar hitam & krim asam.", price: 15, vip: true },
-        { code: "vip_lobster", emoji: "🦞", name: "Poached Lobster", desc: "Lobster panggang mentega.", price: 15, vip: true },
-        { code: "vip_gold", emoji: "🍫", name: "24K Gold Truffle", desc: "Ganache hitam lapis emas.", price: 15, vip: true },
+        { code: "vip_a5", emoji: "🥩", name: "Miyazaki Wagyu A5", desc: "Potongan wagyu Jepang marbling sempurna yang lumer.", price: 15, vip: true },
+        { code: "vip_caviar", emoji: "🥄", name: "Beluga Caviar", desc: "Kaviar hitam premium disajikan bersama blinis & krim.", price: 15, vip: true },
+        { code: "vip_lobster", emoji: "🦞", name: "Poached Lobster", desc: "Daging lobster segar dimasak dengan mentega herbal.", price: 15, vip: true },
+        { code: "vip_gold", emoji: "🍫", name: "24K Gold Truffle", desc: "Cokelat ganache gelap berlapis lembaran emas 24 karat.", price: 15, vip: true },
       ]
     };
 
     let isVipUser = false;
+    let currentRefCode = "VH-00000";
+
+    function haptic(style = "light") {
+      if (tg && tg.HapticFeedback) {
+        tg.HapticFeedback.impactOccurred(style);
+      }
+    }
 
     function showToast(msg) {
       const t = document.getElementById("toast");
       t.innerText = msg;
       t.style.display = "block";
-      setTimeout(() => { t.style.display = "none"; }, 3500);
+      clearTimeout(window._toastTimer);
+      window._toastTimer = setTimeout(() => { t.style.display = "none"; }, 3200);
     }
 
-    function renderGrid(list, containerId, category) {
+    function toggleMemberCard(e) {
+      haptic("light");
+      document.getElementById("member-flip-card").classList.toggle("is-flipped");
+    }
+
+    function flipItemCard(cardEl) {
+      haptic("light");
+      cardEl.classList.toggle("is-flipped");
+    }
+
+    function renderFlipGrid(list, containerId, category) {
       const box = document.getElementById(containerId);
       box.innerHTML = list.map(item => {
-        const priceLabel = item.price === 0 ? "Gratis" : (isVipUser ? "Gratis (VIP)" : `${item.price} VC`);
+        const priceLabel = item.price === 0 ? "Gratis" : (isVipUser ? "Gratis VIP" : `${item.price} VC`);
+        const safeName = item.name.replace(/'/g, "\\'");
         return `
-          <div class="item-card ${item.vip ? 'vip' : ''}">
-            <div>
-              <div class="item-emoji">${item.emoji}</div>
-              <div class="item-name">${item.name}</div>
-              <div class="item-desc">${item.desc}</div>
-            </div>
-            <div class="item-footer">
-              <span class="price">${priceLabel}</span>
-              <button class="btn-order" onclick="placeOrder('${category}', '${item.code}', '${item.name}', ${item.price})">Pesan</button>
+          <div class="flip-scene">
+            <div class="flip-card item-card-inner" onclick="flipItemCard(this)">
+              <div class="flip-face item-face flip-front ${item.vip ? 'vip-glow' : ''}">
+                <div class="item-top">
+                  <span class="item-emoji">${item.emoji}</span>
+                  <span class="price-pill">${priceLabel}</span>
+                </div>
+                <div>
+                  <div class="item-name">${item.name}</div>
+                  <div class="item-tap-label">Tap untuk detail ↻</div>
+                </div>
+              </div>
+              <div class="flip-face item-face flip-back ${item.vip ? 'vip-glow' : ''}">
+                <div class="item-desc-back">${item.desc}</div>
+                <button class="btn-order-glass" onclick="event.stopPropagation(); placeOrder('${category}', '${item.code}', '${safeName}', ${item.price})">
+                  Pesan • ${priceLabel}
+                </button>
+              </div>
             </div>
           </div>
         `;
@@ -287,23 +766,72 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     }
 
     function renderAllMenus() {
-      renderGrid(MENUS.drinksReg, "grid-drinks-reg", "drink");
-      renderGrid(MENUS.drinksVip, "grid-drinks-vip", "drink");
-      renderGrid(MENUS.foodReg, "grid-food-reg", "food");
-      renderGrid(MENUS.foodVip, "grid-food-vip", "food");
+      renderFlipGrid(MENUS.drinksReg, "grid-drinks-reg", "drink");
+      renderFlipGrid(MENUS.drinksVip, "grid-drinks-vip", "drink");
+      renderFlipGrid(MENUS.foodReg, "grid-food-reg", "food");
+      renderFlipGrid(MENUS.foodVip, "grid-food-vip", "food");
+    }
+
+    function renderLapak(items) {
+      const box = document.getElementById("grid-lapak");
+      if (!items.length) {
+        box.innerHTML = `<div style="color: var(--muted); font-size: 12px; grid-column: 1 / -1;">Belum ada item di lapak partner saat ini.</div>`;
+        return;
+      }
+      box.innerHTML = items.map(it => {
+        const safeTitle = it.title.replace(/'/g, "\\'");
+        const safeDesc = (it.content_text || `Item eksklusif dari toko ${it.shop_name}`).replace(/</g, "<").slice(0, 75);
+        return `
+          <div class="flip-scene">
+            <div class="flip-card item-card-inner" onclick="flipItemCard(this)">
+              <div class="flip-face item-face flip-front">
+                <div class="item-top">
+                  <span class="item-emoji">🛍️</span>
+                  <span class="price-pill">${it.price_vc} VC</span>
+                </div>
+                <div>
+                  <div class="item-name">${it.title}</div>
+                  <div class="item-tap-label">🏪 ${it.shop_name} • ↻</div>
+                </div>
+              </div>
+              <div class="flip-face item-face flip-back">
+                <div class="item-desc-back">${safeDesc}</div>
+                <button class="btn-order-glass" onclick="event.stopPropagation(); buyLapakItem(${it.id}, '${safeTitle}', ${it.price_vc})">
+                  Beli • ${it.price_vc} VC
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join("");
     }
 
     function switchTab(tabName, el) {
-      document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+      haptic("light");
+      document.querySelectorAll(".dock-item").forEach(t => t.classList.remove("active"));
       document.querySelectorAll(".section").forEach(s => s.classList.remove("active"));
       el.classList.add("active");
       document.getElementById("tab-" + tabName).classList.add("active");
     }
 
-    async function loadUserProfile() {
-      if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
-        document.getElementById("guest-name").innerText = tg.initDataUnsafe.user.first_name;
+    function syncTelegramHeaderUI() {
+      if (!tg || !tg.initDataUnsafe || !tg.initDataUnsafe.user) return;
+      const u = tg.initDataUnsafe.user;
+      const fullName = [u.first_name, u.last_name].filter(Boolean).join(" ") || "Tamu Lounge";
+      document.getElementById("guest-name").innerText = fullName;
+      document.getElementById("guest-usn").innerText = u.username ? `@${u.username}` : `ID ${u.id}`;
+
+      const initial = (u.first_name || "V").charAt(0).toUpperCase();
+      const avatarBox = document.getElementById("avatar-container");
+      if (u.photo_url) {
+        avatarBox.innerHTML = `<img src="${u.photo_url}" class="avatar-img" alt="PP" onerror="this.outerHTML='<div class=\\'avatar-fallback\\'>${initial}</div>'" />`;
+      } else {
+        document.getElementById("avatar-initial").innerText = initial;
       }
+    }
+
+    async function loadUserProfile() {
+      syncTelegramHeaderUI();
       try {
         const res = await fetch("/api/me", {
           method: "POST",
@@ -313,7 +841,19 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         const data = await res.json();
         if (data.ok) {
           isVipUser = data.is_vip;
-          document.getElementById("guest-balance").innerText = `${data.coins} VC ${data.is_vip ? '• VIP' : ''}`;
+          currentRefCode = data.referral_code || "VH-00000";
+
+          document.getElementById("guest-balance").innerText = `${data.coins} VC`;
+          document.getElementById("guest-charm").innerText = `${data.charm_points || 0} ✨`;
+          document.getElementById("guest-tier").innerText = data.is_vip ? "👑 VIP" : "GUEST";
+          document.getElementById("my-ref-code").innerText = currentRefCode;
+          document.getElementById("ref-count").innerText = data.referral_count || 0;
+
+          if (data.has_referred) {
+            document.getElementById("claim-area").innerHTML =
+              `<div style="font-size: 11px; color: var(--gold); text-align: center; width: 100%; padding: 4px 0;">✅ Bonus undangan sudah diklaim</div>`;
+          }
+
           renderAllMenus();
           renderLapak(data.shop_items || []);
         }
@@ -322,29 +862,39 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       }
     }
 
-    function renderLapak(items) {
-      const box = document.getElementById("grid-lapak");
-      if (!items.length) {
-        box.innerHTML = `<div style="color: var(--muted); font-size: 12px; grid-column: 1 / -1;">Belum ada item dijual di lapak partner saat ini.</div>`;
-        return;
+    function copyReferral(e) {
+      e.stopPropagation();
+      haptic("medium");
+      const shareText = `Gabung ke The Velvet Hour Lounge! Gunakan kode referral saya: ${currentRefCode} untuk bonus +25 VC.`;
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(currentRefCode);
       }
-      box.innerHTML = items.map(it => `
-        <div class="item-card">
-          <div>
-            <div class="item-emoji">🛍️</div>
-            <div class="item-name">${it.title}</div>
-            <div class="item-desc">Toko: ${it.shop_name}</div>
-          </div>
-          <div class="item-footer">
-            <span class="price">${it.price_vc} VC</span>
-            <button class="btn-order" onclick="buyLapakItem(${it.id}, '${it.title.replace(/'/g, "\\'")}', ${it.price_vc})">Beli</button>
-          </div>
-        </div>
-      `).join("");
+      showToast(`✅ Kode ${currentRefCode} disalin!`);
+    }
+
+    async function claimReferral(e) {
+      e.stopPropagation();
+      const code = document.getElementById("input-ref-code").value.trim().toUpperCase();
+      if (code.length < 4) return showToast("⚠️ Masukkan kode referral yang valid.");
+      haptic("medium");
+      const res = await fetch("/api/referral", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initData: tg ? tg.initData : "", code })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        document.getElementById("guest-balance").innerText = `${data.new_coins} VC`;
+        document.getElementById("claim-area").innerHTML =
+          `<div style="font-size: 11px; color: var(--gold); text-align: center; width: 100%; padding: 4px 0;">✅ Bonus +25 VC berhasil diklaim!</div>`;
+        showToast("🎉 Kode referral valid! Kamu & temanmu dapat +25 VC.");
+      } else {
+        showToast("⚠️ " + (data.error || "Kode tidak valid."));
+      }
     }
 
     async function buyLapakItem(itemId, title, price) {
-      if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("medium");
+      haptic("medium");
       showToast(`Membeli ${title}...`);
       const res = await fetch("/api/order", {
         method: "POST",
@@ -353,7 +903,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       });
       const data = await res.json();
       if (data.ok) {
-        showToast("✅ Berhasil dibeli! Cek nota pembelian di PC Hans.");
+        document.getElementById("guest-balance").innerText = `${data.new_coins} VC`;
+        showToast("✅ Berhasil dibeli! Nota dikirim ke PM Hans.");
         if (tg) setTimeout(() => tg.close(), 1000);
       } else {
         showToast("⚠️ " + (data.error || "Gagal membeli item."));
@@ -361,8 +912,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     }
 
     async function placeOrder(category, code, itemName, price) {
-      if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("medium");
-      showToast(`Julian sedang meracik ${itemName}...`);
+      haptic("medium");
+      showToast(`Menyiapkan ${itemName}...`);
       const res = await fetch("/api/order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -370,8 +921,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       });
       const data = await res.json();
       if (data.ok) {
-        document.getElementById("guest-balance").innerText = `${data.new_coins} VC ${isVipUser ? '• VIP' : ''}`;
-        showToast("✅ Pesanan dikirim ke meja bar grup!");
+        document.getElementById("guest-balance").innerText = `${data.new_coins} VC`;
+        showToast("✅ Pesanan dikirim ke ruangan!");
         if (tg) setTimeout(() => tg.close(), 800);
       } else {
         showToast("⚠️ " + (data.error || "Gagal memesan."));
@@ -425,17 +976,31 @@ def _authenticate_user(init_data: str) -> dict | None:
     return None
 
 
-async def _ensure_webapp_user(conn, tg_user: dict):
+def _make_ref_code(uid: int) -> str:
+    digest = hashlib.sha1(f"velvet:{uid}".encode()).hexdigest()[:5].upper()
+    return f"VH-{digest}"
+
+
+async def _ensure_webapp_schema_and_user(conn, tg_user: dict):
+    await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS charm_points INTEGER DEFAULT 0;")
+    await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT;")
+    await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT;")
+    await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_count INTEGER DEFAULT 0;")
+    await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_thread_id BIGINT;")
+
     uid = int(tg_user["id"])
     username = tg_user.get("username")
     full_name = f"{tg_user.get('first_name', '')} {tg_user.get('last_name', '')}".strip() or "Tamu"
+    ref_code = _make_ref_code(uid)
+
     await conn.execute("""
-        INSERT INTO users (user_id, username, full_name, coins, charm_points)
-        VALUES ($1, $2, $3, 50, 0)
+        INSERT INTO users (user_id, username, full_name, coins, charm_points, referral_code, referral_count)
+        VALUES ($1, $2, $3, 50, 0, $4, 0)
         ON CONFLICT (user_id) DO UPDATE SET
             username = COALESCE(EXCLUDED.username, users.username),
-            full_name = EXCLUDED.full_name;
-    """, uid, username, full_name)
+            full_name = EXCLUDED.full_name,
+            referral_code = COALESCE(users.referral_code, EXCLUDED.referral_code);
+    """, uid, username, full_name, ref_code)
 
 
 async def _get_custom_service_media(category: str) -> tuple[str, str]:
@@ -537,10 +1102,13 @@ async def handle_api_me(request: web.Request) -> web.Response:
 
     uid = int(tg_user["id"])
     async with db.pool.acquire() as conn:
-        await _ensure_webapp_user(conn, tg_user)
-        row = await conn.fetchrow("SELECT coins, is_vip, vip_until FROM users WHERE user_id = $1", uid)
+        await _ensure_webapp_schema_and_user(conn, tg_user)
+        row = await conn.fetchrow(
+            "SELECT coins, charm_points, is_vip, vip_until, referral_code, referred_by, referral_count FROM users WHERE user_id = $1",
+            uid,
+        )
         items = await conn.fetch("""
-            SELECT si.id, si.title, si.price_vc, ps.shop_name
+            SELECT si.id, si.title, si.price_vc, si.content_text, ps.shop_name
             FROM shop_items si
             JOIN partner_shops ps ON si.shop_id = ps.id
             WHERE si.is_sold = FALSE
@@ -548,12 +1116,64 @@ async def handle_api_me(request: web.Request) -> web.Response:
         """)
 
     coins = row["coins"] if row else 50
+    charm_points = row["charm_points"] or 0 if row else 0
     is_vip = bool(row and row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
     shop_list = [
-        {"id": r["id"], "title": r["title"], "price_vc": r["price_vc"], "shop_name": r["shop_name"]}
+        {
+            "id": r["id"],
+            "title": r["title"],
+            "price_vc": r["price_vc"],
+            "content_text": r["content_text"] or "",
+            "shop_name": r["shop_name"],
+        }
         for r in items
     ]
-    return web.json_response({"ok": True, "coins": coins, "is_vip": is_vip, "shop_items": shop_list})
+    return web.json_response({
+        "ok": True,
+        "coins": coins,
+        "charm_points": charm_points,
+        "is_vip": is_vip,
+        "referral_code": row["referral_code"] if row else _make_ref_code(uid),
+        "referral_count": (row["referral_count"] or 0) if row else 0,
+        "has_referred": bool(row and row["referred_by"]),
+        "shop_items": shop_list,
+    })
+
+
+async def handle_api_referral(request: web.Request) -> web.Response:
+    body = await request.json()
+    tg_user = _authenticate_user(body.get("initData", ""))
+    if not tg_user:
+        return web.json_response({"ok": False, "error": "Sesi tidak valid"}, status=401)
+
+    uid = int(tg_user["id"])
+    code = str(body.get("code", "")).strip().upper()
+    if not code:
+        return web.json_response({"ok": False, "error": "Kode referral kosong."})
+
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
+            await _ensure_webapp_schema_and_user(conn, tg_user)
+            me = await conn.fetchrow("SELECT coins, referred_by, referral_code FROM users WHERE user_id = $1 FOR UPDATE", uid)
+            if me["referred_by"]:
+                return web.json_response({"ok": False, "error": "Kamu sudah pernah mengklaim kode referral."})
+            if me["referral_code"] == code:
+                return web.json_response({"ok": False, "error": "Tidak bisa memakai kode referral sendiri."})
+
+            inviter = await conn.fetchrow("SELECT user_id, full_name FROM users WHERE referral_code = $1 FOR UPDATE", code)
+            if not inviter:
+                return web.json_response({"ok": False, "error": "Kode referral tidak ditemukan."})
+
+            new_coins = (me["coins"] or 0) + 25
+            await conn.execute("UPDATE users SET coins = $1, referred_by = $2 WHERE user_id = $3", new_coins, inviter["user_id"], uid)
+            await conn.execute(
+                "UPDATE users SET coins = coins + 25, referral_count = COALESCE(referral_count, 0) + 1 WHERE user_id = $1",
+                inviter["user_id"],
+            )
+            await log_wallet_tx(conn, uid, 25, f"Bonus klaim referral {code}")
+            await log_wallet_tx(conn, inviter["user_id"], 25, f"Bonus undang teman ({tg_user.get('first_name', 'Tamu')})")
+
+    return web.json_response({"ok": True, "new_coins": new_coins})
 
 
 async def handle_api_order(request: web.Request) -> web.Response:
@@ -571,7 +1191,7 @@ async def handle_api_order(request: web.Request) -> web.Response:
         item_id = int(body.get("item_id", 0))
         async with db.pool.acquire() as conn:
             async with conn.transaction():
-                await _ensure_webapp_user(conn, tg_user)
+                await _ensure_webapp_schema_and_user(conn, tg_user)
                 item = await conn.fetchrow("""
                     SELECT si.*, ps.owner_id, ps.shop_name
                     FROM shop_items si
@@ -612,7 +1232,7 @@ async def handle_api_order(request: web.Request) -> web.Response:
 
     async with db.pool.acquire() as conn:
         async with conn.transaction():
-            await _ensure_webapp_user(conn, tg_user)
+            await _ensure_webapp_schema_and_user(conn, tg_user)
             row = await conn.fetchrow(
                 "SELECT coins, is_vip, vip_until, last_thread_id FROM users WHERE user_id = $1 FOR UPDATE",
                 uid,
@@ -659,6 +1279,7 @@ async def start_webapp_server():
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_post("/api/me", handle_api_me)
+    app.router.add_post("/api/referral", handle_api_referral)
     app.router.add_post("/api/order", handle_api_order)
 
     runner = web.AppRunner(app)
