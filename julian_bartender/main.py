@@ -1,4 +1,3 @@
-import os
 import html
 import random
 import asyncio
@@ -29,7 +28,6 @@ OWNER_ID = cfg.OWNER_ID
 GROUP_ID = cfg.GROUP_ID
 MINIAPP_MENU_URL = getattr(cfg, "MINIAPP_MENU_URL", "https://t.me/JulianBartender_bot/menu")
 
-# Katalog Item Cepat (jika tamu ketik manual /order [kode] atau /eat [kode])
 DRINKS_CATALOG = {
     "espresso": ("Double Espresso", 0, False),
     "latte": ("Caramel Latte", 0, False),
@@ -65,7 +63,6 @@ SHIFT_ROLES = {
     "host": {"title": "Lounge Host", "quota": 2, "cmds": "/ambience & /toastall"},
 }
 
-# Cooldown earning +1 VC/menit per user
 _last_chat_earn: dict[int, datetime] = {}
 
 
@@ -341,7 +338,7 @@ async def cmd_vip_booth(message: types.Message):
     )
 
 
-# --- MINI-GAME: MYSTERY BOX (/mystery) & DUEL DADU (/dice) ---
+# --- MINI-GAME: MYSTERY BOX (/mystery) ---
 @dp.message(Command("mystery"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_mystery_box(message: types.Message):
     user = message.from_user
@@ -378,6 +375,144 @@ async def cmd_mystery_box(message: types.Message):
     )
 
 
+# --- NATIVE TELEGRAM SLOT MACHINE (/slot [taruhan 10-100]) ---
+@dp.message(Command("slot"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_slot_machine(message: types.Message):
+    parts = (message.text or "").split()
+    bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 15
+    if not (10 <= bet <= 100):
+        return await message.reply("Taruhan mesin slot harus antara <b>10 hingga 100 VC</b>. Contoh: <code>/slot 20</code>", parse_mode=ParseMode.HTML)
+
+    user = message.from_user
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", user.id)
+            if not row or (row["coins"] or 0) < bet:
+                return await message.reply(f"💸 Saldo kamu kurang dari <b>{bet} VC</b> untuk memutar mesin slot.", parse_mode=ParseMode.HTML)
+            await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", bet, user.id)
+
+    dice_msg = await message.reply_dice(emoji="🎰")
+    val = dice_msg.dice.value
+    await asyncio.sleep(2.2)
+
+    if val == 64:
+        payout = bet * 5
+        outcome = f"🎉 <b>JACKPOT 777!</b> {_mention(user.id, user.first_name)} menang besar <b>+{payout} VC</b> (5x)!"
+    elif val in (1, 22, 43):
+        payout = bet * 3
+        outcome = f"✨ <b>TRIPLE MATCH!</b> {_mention(user.id, user.first_name)} memenangkan <b>+{payout} VC</b> (3x)!"
+    elif val in (2, 3, 4, 16, 17, 32, 48, 60, 61, 62, 63):
+        payout = int(bet * 1.5)
+        outcome = f"🥂 <b>DOUBLE PAIR!</b> {_mention(user.id, user.first_name)} mendapat <b>+{payout} VC</b>!"
+    else:
+        payout = 0
+        outcome = f"🥀 Belum beruntung kali ini, {_mention(user.id, user.first_name)} (<b>-{bet} VC</b>)."
+
+    async with db.pool.acquire() as conn:
+        if payout > 0:
+            await conn.execute("UPDATE users SET coins = coins + $1 WHERE user_id = $2", payout, user.id)
+            await _log_tx(conn, user.id, payout - bet, f"Menang Slot Machine (+{payout - bet} VC bersih)")
+        else:
+            await _log_tx(conn, user.id, -bet, "Taruhan Slot Machine")
+
+    await dice_msg.reply(f"🎰 <b>VELVET SLOT MACHINE</b>\n\n{outcome}", parse_mode=ParseMode.HTML)
+
+
+# --- NATIVE TELEGRAM DART DUEL (/dart @username [taruhan 10-100]) ---
+@dp.message(Command("dart"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_dart_challenge(message: types.Message):
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        return await message.reply("Format: <code>/dart @username [taruhan 10-100]</code>", parse_mode=ParseMode.HTML)
+
+    bet = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 20
+    if not (10 <= bet <= 100):
+        return await message.reply("Taruhan dart harus antara <b>10 hingga 100 VC</b>.", parse_mode=ParseMode.HTML)
+
+    challenger = message.from_user
+    async with db.pool.acquire() as conn:
+        target = await _resolve_user(conn, parts[1])
+        if not target or target["user_id"] == challenger.id:
+            return await message.reply("Lawan dart tidak valid atau belum terdaftar.")
+
+        c_coins = await conn.fetchval("SELECT coins FROM users WHERE user_id = $1", challenger.id) or 0
+        t_coins = target["coins"] or 0
+        if c_coins < bet or t_coins < bet:
+            return await message.reply("Saldo salah satu pemain tidak mencukupi.")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        styled_btn(f"🎯 Lempar Dart ({bet} VC)", callback_data=f"playdart_{challenger.id}_{target['user_id']}_{bet}", style="success"),
+        styled_btn("❌ Tolak", callback_data=f"canceldart_{target['user_id']}", style="danger"),
+    ]])
+    await message.reply(
+        f"🎯 <b>TANTANGAN DART LOUNGE</b>\n\n"
+        f"{_mention(challenger.id, challenger.first_name)} menantang {_mention(target['user_id'], target['full_name'])}!\n"
+        f"• <b>Taruhan:</b> <b>{bet} VC</b> (Skor 6 = Bullseye 🎯)",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb,
+    )
+
+
+@dp.callback_query(F.data.startswith("playdart_"))
+async def cb_play_dart(call: types.CallbackQuery):
+    _, c_str, t_str, bet_str = call.data.split("_")
+    c_id, t_id, bet = int(c_str), int(t_str), int(bet_str)
+
+    if call.from_user.id != t_id:
+        return await call.answer("Hanya pemain yang ditantang yang bisa memulai lemparan!", show_alert=True)
+
+    await call.answer("Melempar anak panah...")
+    await call.message.edit_text("🎯 <b>Pertandingan Dart Dimulai!</b> Kedua pemain bersiap melempar ke papan target...", parse_mode=ParseMode.HTML)
+
+    d1_msg = await call.message.answer_dice(emoji="🎯")
+    await asyncio.sleep(1.5)
+    d2_msg = await call.message.answer_dice(emoji="🎯")
+    await asyncio.sleep(2.2)
+
+    s1, s2 = d1_msg.dice.value, d2_msg.dice.value
+
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
+            c_user = await conn.fetchrow("SELECT user_id, full_name, coins FROM users WHERE user_id = $1 FOR UPDATE", c_id)
+            t_user = await conn.fetchrow("SELECT user_id, full_name, coins FROM users WHERE user_id = $1 FOR UPDATE", t_id)
+
+            if (c_user["coins"] or 0) < bet or (t_user["coins"] or 0) < bet:
+                return await d2_msg.reply("⚠️ Pertandingan dibatalkan karena saldo salah satu pemain berubah.")
+
+            if s1 == s2:
+                return await d2_msg.reply(
+                    f"🎯 <b>SERI!</b> Kedua pemain mencetak skor <b>{s1}/6</b>. Taruhan <b>{bet} VC</b> dikembalikan utuh.",
+                    parse_mode=ParseMode.HTML,
+                )
+
+            winner = c_user if s1 > s2 else t_user
+            loser = t_user if s1 > s2 else c_user
+
+            await conn.execute("UPDATE users SET coins = coins + $1 WHERE user_id = $2", bet, winner["user_id"])
+            await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", bet, loser["user_id"])
+            await _log_tx(conn, winner["user_id"], bet, f"Menang Dart vs {loser['full_name']}")
+            await _log_tx(conn, loser["user_id"], -bet, f"Kalah Dart vs {winner['full_name']}")
+
+    bullseye_note = " 🔥 <b>BULLSEYE!</b>" if max(s1, s2) == 6 else ""
+    await d2_msg.reply(
+        f"🎯 <b>HASIL PERTANDINGAN DART</b>{bullseye_note}\n\n"
+        f"• {_mention(c_user['user_id'], c_user['full_name'])}: <b>{s1}/6</b>\n"
+        f"• {_mention(t_user['user_id'], t_user['full_name'])}: <b>{s2}/6</b>\n\n"
+        f"🏆 <b>Pemenang:</b> {_mention(winner['user_id'], winner['full_name'])} meraih <b>+{bet} VC</b>!",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.callback_query(F.data.startswith("canceldart_"))
+async def cb_cancel_dart(call: types.CallbackQuery):
+    t_id = int(call.data.replace("canceldart_", ""))
+    if call.from_user.id != t_id:
+        return await call.answer("Bukan tantangan untukmu!", show_alert=True)
+    await call.answer("Ditolak.")
+    await call.message.edit_text("❌ Tantangan dart ditolak.")
+
+
+# --- DUEL DADU NATIVE TELEGRAM (/dice @username [taruhan 10-100]) ---
 @dp.message(Command("dice"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_dice_duel(message: types.Message):
     parts = (message.text or "").split()
@@ -406,7 +541,7 @@ async def cmd_dice_duel(message: types.Message):
 
     await react_msg(message.chat.id, message.message_id, "🎲")
     kb = InlineKeyboardMarkup(inline_keyboard=[[
-        styled_btn(f"🎲 Terima Duel ({bet} VC)", callback_data=f"accept_duel_{duel_id}", style="success"),
+        styled_btn(f"🎲 Lempar Dadu ({bet} VC)", callback_data=f"accept_duel_{duel_id}", style="success"),
         styled_btn("❌ Tolak", callback_data=f"decline_duel_{duel_id}", style="danger"),
     ]])
     await message.reply(
@@ -422,24 +557,37 @@ async def cmd_dice_duel(message: types.Message):
 async def cb_accept_duel(call: types.CallbackQuery):
     duel_id = int(call.data.replace("accept_duel_", ""))
     async with db.pool.acquire() as conn:
-        async with conn.transaction():
-            duel = await conn.fetchrow("SELECT * FROM duel_challenges WHERE id = $1 FOR UPDATE", duel_id)
-            if not duel:
-                return await call.answer("Tantangan duel sudah kedaluwarsa atau selesai.", show_alert=True)
-            if call.from_user.id != duel["target_id"]:
-                return await call.answer("Bukan tantangan untukmu!", show_alert=True)
+        duel = await conn.fetchrow("SELECT * FROM duel_challenges WHERE id = $1", duel_id)
+        if not duel:
+            return await call.answer("Tantangan duel sudah kedaluwarsa atau selesai.", show_alert=True)
+        if call.from_user.id != duel["target_id"]:
+            return await call.answer("Bukan tantangan untukmu!", show_alert=True)
+        await conn.execute("DELETE FROM duel_challenges WHERE id = $1", duel_id)
 
-            await conn.execute("DELETE FROM duel_challenges WHERE id = $1", duel_id)
+    await call.answer("Melempar dadu...")
+    await call.message.edit_text("🎲 <b>Duel Dadu Dimulai!</b> Julian mengocok dua dadu kristal di atas meja...", parse_mode=ParseMode.HTML)
+
+    dice1 = await call.message.answer_dice(emoji="🎲")
+    await asyncio.sleep(1.4)
+    dice2 = await call.message.answer_dice(emoji="🎲")
+    await asyncio.sleep(2.2)
+
+    d1, d2 = dice1.dice.value, dice2.dice.value
+    bet = duel["bet_vc"]
+
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
             c_user = await conn.fetchrow("SELECT user_id, full_name, coins FROM users WHERE user_id = $1 FOR UPDATE", duel["challenger_id"])
             t_user = await conn.fetchrow("SELECT user_id, full_name, coins FROM users WHERE user_id = $1 FOR UPDATE", duel["target_id"])
-            bet = duel["bet_vc"]
 
             if (c_user["coins"] or 0) < bet or (t_user["coins"] or 0) < bet:
-                return await call.message.edit_text("⚠️ Duel dibatalkan karena saldo salah satu pemain tidak mencukupi.")
+                return await dice2.reply("⚠️ Duel dibatalkan karena saldo salah satu pemain tidak mencukupi.")
 
-            d1, d2 = random.randint(1, 6), random.randint(1, 6)
-            while d1 == d2:
-                d1, d2 = random.randint(1, 6), random.randint(1, 6)
+            if d1 == d2:
+                return await dice2.reply(
+                    f"🎲 <b>SERI!</b> Kedua pemain melempar angka <b>{d1}</b>. Taruhan <b>{bet} VC</b> dikembalikan utuh.",
+                    parse_mode=ParseMode.HTML,
+                )
 
             winner = c_user if d1 > d2 else t_user
             loser = t_user if d1 > d2 else c_user
@@ -449,8 +597,7 @@ async def cb_accept_duel(call: types.CallbackQuery):
             await _log_tx(conn, winner["user_id"], bet, f"Menang Duel Dadu vs {loser['full_name']}")
             await _log_tx(conn, loser["user_id"], -bet, f"Kalah Duel Dadu vs {winner['full_name']}")
 
-    await call.answer("Dadu dilempar!")
-    await call.message.edit_text(
+    await dice2.reply(
         f"🎲 <b>HASIL DUEL DADU MEJA BAR</b>\n\n"
         f"• {_mention(c_user['user_id'], c_user['full_name'])}: <b>{d1}</b>\n"
         f"• {_mention(t_user['user_id'], t_user['full_name'])}: <b>{d2}</b>\n\n"
@@ -473,7 +620,7 @@ async def cb_decline_duel(call: types.CallbackQuery):
     await call.message.edit_text("❌ Tantangan duel dadu ditolak.")
 
 
-# --- STATISTIK TAMU (/bill, /guests, /topcharm) ---
+# --- STATISTIK TAMU (/bill, /topcharm) ---
 @dp.message(Command("bill"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_check_bill(message: types.Message):
     user = message.from_user
@@ -508,7 +655,7 @@ async def cmd_top_charm(message: types.Message):
     )
 
 
-# --- SISTEM SHIFT KERJA (/apply, /myshift, /endshift, /mix, /dish, /welcome, /sober, /ambience, /toastall) ---
+# --- SISTEM SHIFT KERJA ---
 @dp.message(Command("apply"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_apply_shift(message: types.Message):
     parts = (message.text or "").split()
@@ -685,6 +832,8 @@ async def register_julian_commands():
         BotCommand(command="eat", description="Pesan hidangan dapur (atau buka menu)"),
         BotCommand(command="treat", description="Traktir tamu lain (+5 Charm untuk penerima)"),
         BotCommand(command="booth", description="[VIP] Reservasi meja booth eksklusif"),
+        BotCommand(command="slot", description="Putar mesin slot bar (10-100 VC)"),
+        BotCommand(command="dart", description="Duel lempar dart 1v1 berhadiah VC"),
         BotCommand(command="dice", description="Duel dadu 1v1 berhadiah VC"),
         BotCommand(command="mystery", description="Buka Velvet Mystery Box (40 VC)"),
         BotCommand(command="bill", description="Cek saldo VC, Charm & status VIP"),
