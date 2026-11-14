@@ -22,590 +22,418 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>The Velvet Hour — Menu, Mixology & Lounge</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>The Velvet Hour — iOS Glass Concierge</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     :root {
-      --bg: #100b0f;
-      --card: #1b1319;
-      --gold: #dfb866;
-      --gold-dim: rgba(223, 184, 102, 0.28);
-      --cream: #f5efe6;
-      --muted: #a69c95;
+      --bg-base: #080609;
+      --glass-bg: rgba(28, 22, 28, 0.56);
+      --glass-strong: rgba(36, 28, 36, 0.74);
+      --glass-border: rgba(255, 255, 255, 0.14);
+      --glass-highlight: rgba(255, 255, 255, 0.22);
+      --gold: #e5c171;
+      --gold-soft: rgba(229, 193, 113, 0.18);
+      --text-primary: #f7f3ee;
+      --text-secondary: rgba(247, 243, 238, 0.62);
+      --blur: blur(26px) saturate(185%);
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-    html, body { background-color: #100b0f !important; color: #f5efe6 !important; padding-bottom: 90px; min-height: 100vh; }
 
-    header {
-      background: linear-gradient(180deg, #2b121b 0%, #100b0f 100%);
-      padding: 16px 16px 10px;
-      border-bottom: 1px solid var(--gold-dim);
-      position: sticky; top: 0; z-index: 10;
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, sans-serif;
     }
-    .brand { font-size: 10px; letter-spacing: 2px; color: var(--gold); font-weight: 700; }
-    .title-row { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
-    h1 { font-size: 19px; font-weight: 700; color: #f5efe6; }
-    .badge-vc {
-      background: rgba(223, 184, 102, 0.16);
-      border: 1px solid var(--gold);
-      color: var(--gold);
-      padding: 4px 10px;
-      border-radius: 20px;
-      font-size: 12px;
+
+    html, body {
+      background-color: var(--bg-base) !important;
+      color: var(--text-primary) !important;
+      min-height: 100vh;
+      overflow-x: hidden;
+      overscroll-behavior-y: none;
+    }
+
+    /* Ambient iOS Wallpaper Orbs (agar efek blur kaca terlihat nyata) */
+    .ambient-bg {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      overflow: hidden;
+      background: radial-gradient(circle at 50% 0%, #1d0e16 0%, #080609 72%);
+    }
+    .orb {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(75px);
+      opacity: 0.55;
+    }
+    .orb-1 {
+      width: 280px; height: 280px;
+      top: -60px; right: -50px;
+      background: #6b1d35;
+    }
+    .orb-2 {
+      width: 260px; height: 260px;
+      top: 240px; left: -80px;
+      background: #593d16;
+    }
+    .orb-3 {
+      width: 300px; height: 300px;
+      bottom: 40px; right: -70px;
+      background: #3b1328;
+    }
+
+    .app-shell {
+      position: relative;
+      z-index: 1;
+      padding: 14px 16px 112px;
+      max-width: 480px;
+      margin: 0 auto;
+    }
+
+    /* Top Minimal Header */
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+      padding: 4px 2px;
+    }
+    .brand-title {
+      font-size: 11px;
       font-weight: 700;
+      letter-spacing: 2.2px;
+      color: var(--gold);
+      text-transform: uppercase;
+    }
+    .brand-sub {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.4px;
+      color: var(--text-primary);
+      margin-top: 1px;
+    }
+    .pill-balance {
+      background: var(--glass-bg);
+      backdrop-filter: var(--blur);
+      -webkit-backdrop-filter: var(--blur);
+      border: 0.5px solid var(--glass-highlight);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 6px 18px rgba(0,0,0,0.35);
+      padding: 7px 13px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--gold);
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
 
-    .tabs {
-      display: flex; gap: 6px; padding: 10px 12px; overflow-x: auto;
-      background: #100b0f; position: sticky; top: 64px; z-index: 9;
+    /* Pages / Views */
+    .view {
+      display: none;
+      animation: iosFade 0.28s cubic-bezier(0.22, 1, 0.36, 1);
     }
-    .tabs::-webkit-scrollbar { display: none; }
-    .tab {
-      flex: 0 0 auto; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--gold-dim);
-      background: var(--card); color: var(--muted); font-size: 12px; font-weight: 600;
+    .view.active {
+      display: block;
+    }
+    @keyframes iosFade {
+      from { opacity: 0; transform: translateY(6px) scale(0.99); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    /* =========================================
+       3D FLIPPABLE MEMBER PASS CARD (APPLE WALLET STYLE)
+       ========================================= */
+    .flip-stage {
+      perspective: 1300px;
+      margin: 4px 0 14px;
+    }
+    .flip-card {
+      width: 100%;
+      height: 224px;
+      position: relative;
+      transform-style: preserve-3d;
+      transition: transform 0.72s cubic-bezier(0.22, 1, 0.36, 1);
       cursor: pointer;
     }
-    .tab.active {
-      background: linear-gradient(135deg, #4b1725, #29141d);
-      border-color: var(--gold); color: var(--gold);
+    .flip-card.is-flipped {
+      transform: rotateY(180deg);
     }
-
-    .section { display: none; padding: 4px 16px; }
-    .section.active { display: block; }
-    .sub-title {
-      font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px;
-      color: var(--gold); margin: 14px 0 8px; font-weight: 700;
-    }
-
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    .item-card {
-      background: var(--card); border: 1px solid var(--gold-dim);
-      border-radius: 14px; padding: 12px; display: flex; flex-direction: column;
+    .card-face {
+      position: absolute;
+      inset: 0;
+      border-radius: 24px;
+      backface-visibility: hidden;
+      -webkit-backface-visibility: hidden;
+      background: linear-gradient(145deg, rgba(46, 33, 42, 0.78) 0%, rgba(19, 15, 20, 0.85) 100%);
+      backdrop-filter: blur(30px) saturate(200%);
+      -webkit-backdrop-filter: blur(30px) saturate(200%);
+      border: 0.5px solid rgba(255, 255, 255, 0.22);
+      box-shadow:
+        inset 0 1px 1px rgba(255, 255, 255, 0.24),
+        0 20px 40px rgba(0, 0, 0, 0.55);
+      padding: 18px 20px;
+      display: flex;
+      flex-direction: column;
       justify-content: space-between;
+      overflow: hidden;
     }
-    .item-card.vip { border-color: rgba(223, 184, 102, 0.65); background: linear-gradient(160deg, #241914, #181116); }
-    .item-emoji { font-size: 24px; margin-bottom: 6px; }
-    .item-name { font-size: 13px; font-weight: 700; margin-bottom: 3px; color: #f5efe6; }
-    .item-desc { font-size: 11px; color: var(--muted); line-height: 1.35; margin-bottom: 10px; }
-    .item-footer { display: flex; justify-content: space-between; align-items: center; }
-    .price { font-size: 11px; font-weight: 700; color: var(--gold); }
-
-    .btn-order {
-      background: var(--gold); color: #140f0b; border: none; border-radius: 8px;
-      padding: 6px 11px; font-size: 11px; font-weight: 700; cursor: pointer;
+    .card-face::before {
+      content: "";
+      position: absolute;
+      top: -40%; left: -30%;
+      width: 160%; height: 160%;
+      background: radial-gradient(circle at 25% 20%, rgba(229, 193, 113, 0.16), transparent 55%);
+      pointer-events: none;
     }
-
-    .box-panel {
-      background: var(--card); border: 1px solid var(--gold-dim);
-      border-radius: 14px; padding: 14px; margin-top: 10px;
-    }
-    label { display: block; font-size: 12px; color: var(--gold); font-weight: 600; margin: 10px 0 6px; }
-    select, .input-field {
-      width: 100%; background: #100b0f; border: 1px solid var(--gold-dim);
-      color: #f5efe6; padding: 11px; border-radius: 10px; font-size: 13px;
-      outline: none;
-    }
-    .btn-full {
-      width: 100%; background: linear-gradient(135deg, #dfb866, #b88c38);
-      color: #140f0b; border: none; padding: 12px; border-radius: 10px;
-      font-size: 13px; font-weight: 800; cursor: pointer; margin-top: 14px;
+    .card-back {
+      transform: rotateY(180deg);
+      background: linear-gradient(145deg, rgba(24, 19, 25, 0.9) 0%, rgba(38, 25, 33, 0.86) 100%);
+      padding: 0;
     }
 
-    .toast {
-      position: fixed; bottom: 20px; left: 16px; right: 16px;
-      background: #23181e; border: 1px solid var(--gold); color: #f5efe6;
-      padding: 12px 14px; border-radius: 12px; font-size: 13px; text-align: center;
-      display: none; z-index: 99; box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+    /* Card Front Elements */
+    .cf-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      z-index: 1;
     }
-  </style>
-</head>
-<body>
-  <header>
-    <div class="brand">THE VELVET HOUR  •  LOUNGE CONCIERGE</div>
-    <div class="title-row">
-      <h1 id="guest-name">Selamat Malam</h1>
-      <div class="badge-vc" id="guest-balance">50 VC</div>
-    </div>
-  </header>
-
-  <div class="tabs">
-    <div class="tab active" onclick="switchTab('drinks', this)">🍸 Minuman</div>
-    <div class="tab" onclick="switchTab('mixology', this)">🧪 Racik Koktail</div>
-    <div class="tab" onclick="switchTab('food', this)">🍽️ Hidangan</div>
-    <div class="tab" onclick="switchTab('lapak', this)">🏪 Lapak</div>
-    <div class="tab" onclick="switchTab('music', this)">🎶 Jukebox</div>
-  </div>
-
-  <div id="tab-drinks" class="section active">
-    <div class="sub-title">Signature & Classic Drinks (Gratis)</div>
-    <div class="grid" id="grid-drinks-reg"></div>
-    <div class="sub-title">✨ VIP Reserve Cellar (Gratis VIP / 15 VC)</div>
-    <div class="grid" id="grid-drinks-vip"></div>
-  </div>
-
-  <div id="tab-mixology" class="section">
-    <div class="box-panel">
-      <div style="font-size: 15px; font-weight: 700; color: var(--gold);">🧪 Custom Mixology Bar</div>
-      <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">
-        Pilih bahan racikanmu sendiri—Julian akan mengocoknya langsung di meja bar grup (Biaya: <b>10 VC</b>, Gratis VIP).
-      </div>
-
-      <label>1. Dasar Minuman (Base)</label>
-      <select id="mix-base">
-        <option value="Aged Bourbon Whisky">🥃 Aged Bourbon Whisky</option>
-        <option value="Botanical London Gin">🍸 Botanical London Gin</option>
-        <option value="Silver Agave Tequila">🌵 Silver Agave Tequila</option>
-        <option value="Dark Spiced Rum">🏴‍☠️ Dark Spiced Rum</option>
-        <option value="Sparkling Non-Alcoholic Tonic">🫧 Sparkling Tonic (Non-Alkohol)</option>
-      </select>
-
-      <label>2. Campuran Rasa (Mixer & Syrup)</label>
-      <select id="mix-syrup">
-        <option value="Blood Orange & Bitters">🍊 Blood Orange & Aromatic Bitters</option>
-        <option value="Velvet Rose & Lychee">🌹 Velvet Rose & Lychee Nectar</option>
-        <option value="Smoked Honey & Espresso">☕ Smoked Honey & Cold Espresso</option>
-        <option value="Crushed Mint & Yuzu Lime">🌿 Crushed Mint & Yuzu Lime</option>
-      </select>
-
-      <label>3. Hiasan Gelas (Garnish)</label>
-      <select id="mix-garnish">
-        <option value="Kulit Jeruk Bakar">🔥 Kulit Jeruk Bakar (Torched Peel)</option>
-        <option value="Batang Kayu Manis Asap">🪵 Batang Kayu Manis Asap</option>
-        <option value="Kelopak Mawar Merah">🥀 Kelopak Mawar Merah</option>
-        <option value="Ceri Hitam Maraschino">🍒 Ceri Hitam Maraschino</option>
-      </select>
-
-      <label>4. Beri Nama Koktailmu (Opsional)</label>
-      <input type="text" id="mix-name" class="input-field" placeholder="Contoh: Midnight Crimson" maxlength="32" />
-
-      <button class="btn-full" onclick="submitCustomMix()">🍸 Minta Julian Racik Sekarang</button>
-    </div>
-  </div>
-
-  <div id="tab-food" class="section">
-    <div class="sub-title">Midnight Kitchen (Gratis)</div>
-    <div class="grid" id="grid-food-reg"></div>
-    <div class="sub-title">✨ Chef's VIP Gastronomy (Gratis VIP / 15 VC)</div>
-    <div class="grid" id="grid-food-vip"></div>
-  </div>
-
-  <div id="tab-lapak" class="section">
-    <div class="sub-title">🏪 Etalase Item Lapak Partner Aktif</div>
-    <div class="grid" id="grid-lapak">
-      <div style="color: var(--muted); font-size: 12px;">Memuat katalog lapak...</div>
-    </div>
-  </div>
-
-  <div id="tab-music" class="section">
-    <div class="box-panel">
-      <div style="font-size: 15px; font-weight: 700; color: var(--gold);">🎧 Request Lagu ke Kaelen DJ</div>
-      <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">
-        Lagu langsung masuk antrean & diumumkan Kaelen di grup (Biaya: <b>10 VC</b>, Gratis VIP).
-      </div>
-      <input type="text" id="song-input" class="input-field" style="margin-top: 12px;" placeholder="Contoh: Apocalypse - Cigarettes After Sex" />
-      <button class="btn-full" onclick="submitSong()">🎶 Putar di Ruang Utama</button>
-    </div>
-  </div>
-
-  <div id="toast" class="toast"></div>
-
-  <script>
-    const tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
-    if (tg) {
-      tg.ready();
-      tg.expand();
-      if (tg.setHeaderColor) tg.setHeaderColor('#100b0f');
-      if (tg.setBackgroundColor) tg.setBackgroundColor('#100b0f');
+    .cf-user {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .avatar-ring {
+      width: 50px;
+      height: 50px;
+      border-radius: 50%;
+      padding: 2px;
+      background: linear-gradient(135deg, #f3d68f, #8e6725);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+      flex-shrink: 0;
+    }
+    .avatar-img {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      object-fit: cover;
+      background: #1b141a;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 18px;
+      color: var(--gold);
+    }
+    .cf-name {
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: -0.2px;
+      color: #fff;
+    }
+    .cf-usn {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-top: 1px;
+    }
+    .tier-chip {
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: rgba(229, 193, 113, 0.16);
+      border: 0.5px solid rgba(229, 193, 113, 0.55);
+      color: var(--gold);
     }
 
-    const MENUS = {
-      drinksReg: [
-        { code: "negroni", emoji: "🥃", name: "Classic Negroni", desc: "Gin, Campari & sweet vermouth.", price: 0 },
-        { code: "whisky", emoji: "🧊", name: "Smoked Whisky", desc: "Bourbon dengan es batu kristal.", price: 0 },
-        { code: "mojito", emoji: "🌿", name: "Velvet Mojito", desc: "Daun mint, lime & soda dingin.", price: 0 },
-        { code: "espresso", emoji: "☕", name: "Double Espresso", desc: "Kopi panggang gelap pekat.", price: 0 },
-        { code: "latte", emoji: "🥛", name: "Caramel Latte", desc: "Espresso lembut & karamel.", price: 0 },
-        { code: "mocktail", emoji: "🍹", name: "Crimson Sunset", desc: "Delima, cranberry & tonic segar.", price: 0 },
-      ],
-      drinksVip: [
-        { code: "vip_dom", emoji: "🍾", name: "Dom Pérignon Vintage", desc: "Sampanye Prancis eksklusif.", price: 15, vip: true },
-        { code: "vip_blue", emoji: "💎", name: "Blue Label Reserve", desc: "Scotch langka aroma kayu ek.", price: 15, vip: true },
-        { code: "vip_absinthe", emoji: "🧪", name: "Emerald Absinthe", desc: "Gula karamel terbakar.", price: 15, vip: true },
-        { code: "vip_royal", emoji: "👑", name: "Velvet Royal Martini", desc: "Vodka dengan edible gold leaf.", price: 15, vip: true },
-      ],
-      foodReg: [
-        { code: "steak", emoji: "🥩", name: "Ribeye Steak", desc: "Medium-rare saus lada hitam.", price: 0 },
-        { code: "pasta", emoji: "🍝", name: "Truffle Carbonara", desc: "Spaghetti jamur truffle & keju.", price: 0 },
-        { code: "fries", emoji: "🍟", name: "Truffle Fries", desc: "Kentang renyah tabur parmesan.", price: 0 },
-        { code: "platter", emoji: "🧀", name: "Charcuterie Board", desc: "Keju artisan, buah & crackers.", price: 0 },
-        { code: "tiramisu", emoji: "🍰", name: "Espresso Tiramisu", desc: "Krim mascarpone klasik Italia.", price: 0 },
-        { code: "croissant", emoji: "🥐", name: "Butter Croissant", desc: "Pastry hangat mentega Prancis.", price: 0 },
-      ],
-      foodVip: [
-        { code: "vip_a5", emoji: "🥩", name: "Miyazaki Wagyu A5", desc: "Wagyu Jepang lumer di mulut.", price: 15, vip: true },
-        { code: "vip_caviar", emoji: "🥄", name: "Beluga Caviar", desc: "Kaviar hitam & krim asam.", price: 15, vip: true },
-        { code: "vip_lobster", emoji: "🦞", name: "Poached Lobster", desc: "Lobster panggang mentega.", price: 15, vip: true },
-        { code: "vip_gold", emoji: "🍫", name: "24K Gold Truffle", desc: "Ganache hitam lapis emas.", price: 15, vip: true },
-      ]
-    };
-
-    let isVipUser = false;
-
-    function showToast(msg) {
-      const t = document.getElementById("toast");
-      t.innerText = msg;
-      t.style.display = "block";
-      setTimeout(() => { t.style.display = "none"; }, 3500);
+    .cf-mid {
+      z-index: 1;
+      margin-top: 4px;
+    }
+    .cf-bal-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1.4px;
+      color: var(--text-secondary);
+    }
+    .cf-bal-val {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.6px;
+      color: #fff;
+      margin-top: 2px;
+    }
+    .cf-bal-val span {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--gold);
     }
 
-    function renderGrid(list, containerId, category) {
-      const box = document.getElementById(containerId);
-      box.innerHTML = list.map(item => {
-        const priceLabel = item.price === 0 ? "Gratis" : (isVipUser ? "Gratis (VIP)" : `${item.price} VC`);
-        return `
-          <div class="item-card ${item.vip ? 'vip' : ''}">
-            <div>
-              <div class="item-emoji">${item.emoji}</div>
-              <div class="item-name">${item.name}</div>
-              <div class="item-desc">${item.desc}</div>
-            </div>
-            <div class="item-footer">
-              <span class="price">${priceLabel}</span>
-              <button class="btn-order" onclick="placeOrder('${category}', '${item.code}', '${item.name}', ${item.price})">Pesan</button>
-            </div>
-          </div>
-        `;
-      }).join("");
+    .cf-bot {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      z-index: 1;
+      border-top: 0.5px solid rgba(255,255,255,0.1);
+      padding-top: 10px;
+    }
+    .cf-stat {
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+    .cf-stat b {
+      color: var(--text-primary);
+      font-weight: 700;
+    }
+    .flip-hint {
+      font-size: 11px;
+      color: var(--gold);
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 4px;
     }
 
-    function renderAllMenus() {
-      renderGrid(MENUS.drinksReg, "grid-drinks-reg", "drink");
-      renderGrid(MENUS.drinksVip, "grid-drinks-vip", "drink");
-      renderGrid(MENUS.foodReg, "grid-food-reg", "food");
-      renderGrid(MENUS.foodVip, "grid-food-vip", "food");
+    /* Card Back Elements */
+    .mag-strip {
+      width: 100%;
+      height: 36px;
+      background: linear-gradient(90deg, #0b090c, #241c22, #0b090c);
+      margin-top: 16px;
+      border-top: 0.5px solid rgba(255,255,255,0.08);
+      border-bottom: 0.5px solid rgba(255,255,255,0.08);
+    }
+    .cb-body {
+      padding: 12px 20px 16px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      flex: 1;
+    }
+    .ref-box {
+      background: rgba(255, 255, 255, 0.06);
+      border: 0.5px solid rgba(255, 255, 255, 0.14);
+      border-radius: 14px;
+      padding: 10px 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .ref-label {
+      font-size: 10px;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .ref-code {
+      font-size: 15px;
+      font-weight: 800;
+      color: var(--gold);
+      letter-spacing: 1px;
+      margin-top: 2px;
+    }
+    .btn-copy {
+      background: rgba(229, 193, 113, 0.2);
+      border: 0.5px solid var(--gold);
+      color: var(--gold);
+      border-radius: 10px;
+      padding: 7px 12px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .btn-copy:active {
+      transform: scale(0.95);
+    }
+    .cb-meta-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-secondary);
+      margin-top: 8px;
     }
 
-    function switchTab(tabName, el) {
-      document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
-      document.querySelectorAll(".section").forEach(s => s.classList.remove("active"));
-      el.classList.add("active");
-      document.getElementById("tab-" + tabName).classList.add("active");
+    /* Glass Panels & Lists */
+    .glass-card {
+      background: var(--glass-bg);
+      backdrop-filter: var(--blur);
+      -webkit-backdrop-filter: var(--blur);
+      border: 0.5px solid var(--glass-border);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), 0 10px 28px rgba(0,0,0,0.35);
+      border-radius: 20px;
+      padding: 16px;
+      margin-bottom: 12px;
     }
 
-    async function loadUserProfile() {
-      if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
-        document.getElementById("guest-name").innerText = tg.initDataUnsafe.user.first_name;
-      }
-      try {
-        const res = await fetch("/api/me", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ initData: tg ? tg.initData : "" })
-        });
-        const data = await res.json();
-        if (data.ok) {
-          isVipUser = data.is_vip;
-          document.getElementById("guest-balance").innerText = `${data.coins} VC ${data.is_vip ? '• VIP' : ''}`;
-          renderAllMenus();
-          renderLapak(data.shop_items || []);
-        }
-      } catch (e) {
-        renderAllMenus();
-      }
+    .section-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.4px;
+      text-transform: uppercase;
+      color: var(--gold);
+      margin: 14px 4px 10px;
     }
 
-    function renderLapak(items) {
-      const box = document.getElementById("grid-lapak");
-      if (!items.length) {
-        box.innerHTML = `<div style="color: var(--muted); font-size: 12px; grid-column: 1 / -1;">Belum ada item dijual di lapak partner saat ini.</div>`;
-        return;
-      }
-      box.innerHTML = items.map(it => `
-        <div class="item-card">
-          <div>
-            <div class="item-emoji">🛍️</div>
-            <div class="item-name">${it.title}</div>
-            <div class="item-desc">Toko: ${it.shop_name}</div>
-          </div>
-          <div class="item-footer">
-            <span class="price">${it.price_vc} VC</span>
-            <button class="btn-order" onclick="buyLapakItem(${it.id}, '${it.title.replace(/'/g, "\\'")}', ${it.price_vc})">Beli</button>
-          </div>
-        </div>
-      `).join("");
+    /* iOS Segmented Control */
+    .ios-segment {
+      display: flex;
+      background: rgba(255, 255, 255, 0.06);
+      backdrop-filter: var(--blur);
+      -webkit-backdrop-filter: var(--blur);
+      border: 0.5px solid var(--glass-border);
+      border-radius: 14px;
+      padding: 3px;
+      margin-bottom: 14px;
+    }
+    .seg-btn {
+      flex: 1;
+      text-align: center;
+      padding: 8px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      border-radius: 11px;
+      cursor: pointer;
+      transition: all 0.22s ease;
+    }
+    .seg-btn.active {
+      background: rgba(229, 193, 113, 0.2);
+      color: var(--gold);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
     }
 
-    async function buyLapakItem(itemId, title, price) {
-      if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("medium");
-      showToast(`Membeli ${title}...`);
-      const res = await fetch("/api/order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ initData: tg ? tg.initData : "", category: "lapak", item_id: itemId, item_name: title, price: price })
-      });
-      const data = await res.json();
-      if (data.ok) {
-        showToast("✅ Berhasil dibeli! Cek nota pembelian di PC Hans.");
-        if (tg) setTimeout(() => tg.close(), 1000);
-      } else {
-        showToast("⚠️ " + (data.error || "Gagal membeli item."));
-      }
+    /* Menu Grid */
+    .menu-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 11px;
     }
-
-    async function placeOrder(category, code, itemName, price) {
-      if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("medium");
-      showToast(`Julian sedang meracik ${itemName}...`);
-      const res = await fetch("/api/order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ initData: tg ? tg.initData : "", category, code, item_name: itemName, price })
-      });
-      const data = await res.json();
-      if (data.ok) {
-        document.getElementById("guest-balance").innerText = `${data.new_coins} VC ${isVipUser ? '• VIP' : ''}`;
-        showToast("✅ Pesanan dikirim ke meja bar grup!");
-        if (tg) setTimeout(() => tg.close(), 800);
-      } else {
-        showToast("⚠️ " + (data.error || "Gagal memesan."));
-      }
+    .menu-item {
+      background: var(--glass-bg);
+      backdrop-filter: var(--blur);
+      -webkit-backdrop-filter: var(--blur);
+      border: 0.5px solid var(--glass-border);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.09);
+      border-radius: 18px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      transition: transform 0.16s ease;
     }
-
-    async function submitCustomMix() {
-      const base = document.getElementById("mix-base").value;
-      const syrup = document.getElementById("mix-syrup").value;
-      const garnish = document.getElementById("mix-garnish").value;
-      const customName = document.getElementById("mix-name").value.trim() || "Velvet Custom Signature";
-      const fullLabel = `${customName} (${base} + ${syrup}, garnish ${garnish})`;
-      await placeOrder("custom_mix", "mix", fullLabel, 10);
+    .menu-item:active {
+      transform: scale(0.97);
     }
-
-    async function submitSong() {
-      const song = document.getElementById("song-input").value.trim();
-      if (song.length < 3) return showToast("⚠️ Ketik judul lagu terlebih dahulu.");
-      await placeOrder("song", "reqsong", song, 10);
+    .menu-item.vip-glow {
+      border-color: rgba(229, 193, 113, 0.45);
+      background: linear-gradient(160deg, rgba(46, 33, 24, 0.65), rgba(24, 18, 24, 0.62));
     }
-
-    renderAllMenus();
-    loadUserProfile();
-  </script>
-</body>
-</html>"""
-
-
-def _verify_telegram_init_data(init_data: str, bot_token: str) -> dict | None:
-    try:
-        parsed = dict(parse_qsl(init_data, keep_blank_values=True))
-        received_hash = parsed.pop("hash", None)
-        if not received_hash:
-            return None
-        data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
-        secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
-        calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(calculated_hash, received_hash):
-            return None
-        return json.loads(parsed.get("user", "{}"))
-    except Exception:
-        return None
-
-
-def _authenticate_user(init_data: str) -> dict | None:
-    for tok in [getattr(cfg, "TOKEN_JULIAN", ""), getattr(cfg, "TOKEN_HANS", "")]:
-        if tok:
-            u = _verify_telegram_init_data(init_data, tok)
-            if u and u.get("id"):
-                return u
-    return None
-
-
-async def _ensure_webapp_user(conn, tg_user: dict):
-    uid = int(tg_user["id"])
-    username = tg_user.get("username")
-    full_name = f"{tg_user.get('first_name', '')} {tg_user.get('last_name', '')}".strip() or "Tamu"
-    await conn.execute("""
-        INSERT INTO users (user_id, username, full_name, coins, charm_points)
-        VALUES ($1, $2, $3, 50, 0)
-        ON CONFLICT (user_id) DO UPDATE SET
-            username = COALESCE(EXCLUDED.username, users.username),
-            full_name = EXCLUDED.full_name;
-    """, uid, username, full_name)
-
-
-async def _serve_with_bartender_animation(category: str, mention: str, item_name: str, is_vip: bool):
-    vip_tag = " 👑 <i>(VIP Reserve)</i>" if is_vip else ""
-    try:
-        await julian_bot.send_chat_action(cfg.GROUP_ID, ChatAction.TYPING)
-    except Exception:
-        pass
-
-    if category in ("drink", "custom_mix"):
-        msg = await julian_bot.send_message(
-            cfg.GROUP_ID,
-            f"🧊 <i>Julian mengambil gelas kristal dingin dan menyiapkan bahan untuk {mention}...</i>",
-            parse_mode=ParseMode.HTML,
-        )
-        await asyncio.sleep(1.3)
-        await msg.edit_text(
-            "🍸 <i>Julian mengocok shaker dengan ritme presisi lalu menuangkannya perlahan...</i>",
-            parse_mode=ParseMode.HTML,
-        )
-        await asyncio.sleep(1.3)
-        header = "🧪 <b>CUSTOM MIXOLOGY — JULIAN</b>" if category == "custom_mix" else "🍸 <b>JULIAN — BARTENDER SERVICE</b>"
-        await msg.edit_text(
-            f"{header}\n\n"
-            f"<i>Julian menggeser gelas di atas meja bar mahoni menuju {mention}{vip_tag}.</i>\n"
-            f"• <b>Pesanan:</b> <b>{item_name}</b>\n"
-            f"<i>\"Silakan dinikmati malam ini.\"</i>",
-            parse_mode=ParseMode.HTML,
-        )
-    elif category == "food":
-        msg = await julian_bot.send_message(
-            cfg.GROUP_ID,
-            f"🔥 <i>Pesanan dapur untuk {mention} sedang diproses oleh chef...</i>",
-            parse_mode=ParseMode.HTML,
-        )
-        await asyncio.sleep(1.8)
-        await msg.edit_text(
-            f"🍽️ <b>JULIAN — MIDNIGHT KITCHEN</b>\n\n"
-            f"<i>Hidangan hangat baru saja keluar dari dapur dan disajikan ke meja {mention}{vip_tag}.</i>\n"
-            f"• <b>Hidangan:</b> <b>{item_name}</b>",
-            parse_mode=ParseMode.HTML,
-        )
-
-
-async def handle_index(request: web.Request) -> web.Response:
-    return web.Response(
-        text=EMBEDDED_HTML,
-        content_type="text/html",
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
-    )
-
-
-async def handle_api_me(request: web.Request) -> web.Response:
-    body = await request.json()
-    tg_user = _authenticate_user(body.get("initData", ""))
-    if not tg_user:
-        return web.json_response({"ok": False, "error": "Sesi tidak valid"}, status=401)
-
-    uid = int(tg_user["id"])
-    async with db.pool.acquire() as conn:
-        await _ensure_webapp_user(conn, tg_user)
-        row = await conn.fetchrow("SELECT coins, is_vip, vip_until FROM users WHERE user_id = $1", uid)
-        items = await conn.fetch("""
-            SELECT si.id, si.title, si.price_vc, ps.shop_name
-            FROM shop_items si
-            JOIN partner_shops ps ON si.shop_id = ps.id
-            WHERE si.is_sold = FALSE
-            ORDER BY si.id DESC LIMIT 20
-        """)
-
-    coins = row["coins"] if row else 50
-    is_vip = bool(row and row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
-    shop_list = [
-        {"id": r["id"], "title": r["title"], "price_vc": r["price_vc"], "shop_name": r["shop_name"]}
-        for r in items
-    ]
-    return web.json_response({"ok": True, "coins": coins, "is_vip": is_vip, "shop_items": shop_list})
-
-
-async def handle_api_order(request: web.Request) -> web.Response:
-    body = await request.json()
-    tg_user = _authenticate_user(body.get("initData", ""))
-    if not tg_user:
-        return web.json_response({"ok": False, "error": "Sesi Telegram tidak valid"}, status=401)
-
-    uid = int(tg_user["id"])
-    first_name = html.escape(tg_user.get("first_name", "Tamu"))
-    mention = f'<a href="tg://user?id={uid}">{first_name}</a>'
-    category = body.get("category", "drink")
-
-    if category == "lapak":
-        item_id = int(body.get("item_id", 0))
-        async with db.pool.acquire() as conn:
-            async with conn.transaction():
-                await _ensure_webapp_user(conn, tg_user)
-                item = await conn.fetchrow("""
-                    SELECT si.*, ps.owner_id, ps.shop_name
-                    FROM shop_items si
-                    JOIN partner_shops ps ON si.shop_id = ps.id
-                    WHERE si.id = $1 FOR UPDATE
-                """, item_id)
-                if not item or item["is_sold"]:
-                    return web.json_response({"ok": False, "error": "Item sudah terjual atau tidak tersedia."})
-                if item["owner_id"] == uid:
-                    return web.json_response({"ok": False, "error": "Tidak bisa membeli item lapak sendiri."})
-
-                buyer = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", uid)
-                price = item["price_vc"]
-                if not buyer or (buyer["coins"] or 0) < price:
-                    return web.json_response({"ok": False, "error": f"Saldo kurang! Butuh {price} VC."})
-
-                new_coins = buyer["coins"] - price
-                await conn.execute("UPDATE users SET coins = $1 WHERE user_id = $2", new_coins, uid)
-                await conn.execute("UPDATE users SET coins = coins + $1 WHERE user_id = $2", price, item["owner_id"])
-                await conn.execute("UPDATE shop_items SET is_sold = TRUE, buyer_id = $1 WHERE id = $2", uid, item_id)
-                await log_wallet_tx(conn, uid, -price, f"Beli di {item['shop_name']}: {item['title']}")
-                await log_wallet_tx(conn, item["owner_id"], price, f"Penjualan {item['title']}")
-
-        try:
-            await hans_bot.send_message(
-                uid,
-                f"🧾 <b>NOTA PEMBELIAN LAPAK — {html.escape(item['shop_name'])}</b>\n\n"
-                f"• <b>Item:</b> {html.escape(item['title'])}\n"
-                f"• <b>Harga:</b> {price} VC\n"
-                f"• <b>Konten / Catatan:</b>\n<blockquote>{html.escape(item['content_text'] or '-')}</blockquote>",
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception:
-            pass
-        return web.json_response({"ok": True, "new_coins": new_coins})
-
-    item_name = html.escape(str(body.get("item_name", "Menu"))[:100])
-    base_price = int(body.get("price", 0))
-
-    async with db.pool.acquire() as conn:
-        async with conn.transaction():
-            await _ensure_webapp_user(conn, tg_user)
-            row = await conn.fetchrow("SELECT coins, is_vip, vip_until FROM users WHERE user_id = $1 FOR UPDATE", uid)
-
-            is_vip = bool(row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
-            final_cost = 0 if is_vip else max(0, base_price)
-            coins = row["coins"] or 0
-
-            if coins < final_cost:
-                return web.json_response({
-                    "ok": False,
-                    "error": f"Saldo kurang! Butuh {final_cost} VC (saldo kamu: {coins} VC)."
-                })
-
-            new_coins = coins - final_cost
-            if final_cost > 0:
-                await conn.execute("UPDATE users SET coins = $1 WHERE user_id = $2", new_coins, uid)
-                await log_wallet_tx(conn, uid, -final_cost, f"Pesanan Mini App: {item_name}")
-
-    if category in ("drink", "custom_mix", "food"):
-        await add_quest_progress(uid, "bar_social", 1)
-        asyncio.create_task(_serve_with_bartender_animation(category, mention, item_name, is_vip))
-    elif category == "song":
-        await add_quest_progress(uid, "music_vibe", 1)
-        rp_text = (
-            f"🎶 <b>KAELEN — JUKEBOX REQUEST</b>\n\n"
-            f"<i>Kaelen menyesuaikan piringan hitam di booth DJ atas permintaan {mention}.</i>\n"
-            f"• <b>Lagu Dipilih:</b> <b>{item_name}</b>"
-        )
-        await kaelen_bot.send_message(cfg.GROUP_ID, rp_text, parse_mode=ParseMode.HTML)
-
-    return web.json_response({"ok": True, "new_coins": new_coins})
-
-
-async def start_webapp_server():
-    app = web.Application()
-    app.router.add_get("/", handle_index)
-    app.router.add_post("/api/me", handle_api_me)
-    app.router.add_post("/api/order", handle_api_order)
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 8080))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
+    .mi-emoji { font-size: 26px; margin-bottom: 8px; }
+    .mi-title { font-size: 13.5px; font-weight: 700; color: #fff; margin-bottom: 4px; }
+    .mi-desc { font-size: 11px; color: var(--text-secondary); line-height:
