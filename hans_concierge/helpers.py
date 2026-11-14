@@ -11,10 +11,16 @@ bot = Bot(token=cfg.TOKEN_HANS)
 
 OWNER_ID = cfg.OWNER_ID
 GROUP_ID = cfg.GROUP_ID
-CHANNEL_ID = getattr(cfg, "CHANNEL_ID", None) or getattr(cfg, "CONFESS_CHANNEL_ID", None)
+CH_INFO_ID = getattr(cfg, "CH_INFO_ID", 0)
+CH_PROMOTE_ID = getattr(cfg, "CH_PROMOTE_ID", 0)
+CH_INFO_LINK = getattr(cfg, "CH_INFO_LINK", "https://t.me/")
+CH_PROMOTE_LINK = getattr(cfg, "CH_PROMOTE_LINK", "https://t.me/")
+CHANNEL_ID = CH_INFO_ID
+
 REQUIRED_CN_SYMBOL = getattr(cfg, "REQUIRED_CN_SYMBOL", "🥂")
-VIP_COST_24H = getattr(cfg, "VIP_COST_24H", 150)
-DAILY_REWARD_VC = getattr(cfg, "DAILY_REWARD_VC", 20)
+WELCOME_BONUS = getattr(cfg, "WELCOME_BONUS", 200)
+VIP_COST_24H = getattr(cfg, "VIP_COST_24H", 300)
+DAILY_REWARD_VC = getattr(cfg, "DAILY_COIN", 30)
 REFERRAL_BONUS_VC = 50
 CONFESS_COST_VC = 5
 PM_COST_VC = 10
@@ -22,19 +28,19 @@ PM_COST_VC = 10
 DAILY_QUESTS = {
     "daily_checkin": {
         "title": "Absen Malam Lounge",
-        "desc": "Klaim jatah absen harian (/daily) di lobi Hans.",
+        "desc": "Klaim jatah absen harian /daily di lobi Hans.",
         "target": 1,
         "reward": 15,
     },
     "bar_social": {
         "title": "Penikmat Suasana Bar",
-        "desc": "Pesan minuman/makanan (/order, /eat) atau traktir tamu (/treat) di grup.",
+        "desc": "Pesan minuman/makanan lewat /order, /eat atau traktir tamu lewat /treat di grup.",
         "target": 1,
         "reward": 20,
     },
     "music_vibe": {
         "title": "Kurator Nada Malam",
-        "desc": "Request lagu di jukebox grup (/reqsong) atau dengarkan lewat /myearphone.",
+        "desc": "Request lagu di jukebox grup lewat /reqsong atau dengarkan lewat /myearphone.",
         "target": 1,
         "reward": 20,
     },
@@ -60,7 +66,7 @@ def styled_btn(
     style: str | None = None,
     icon_emoji_id: str | None = None,
 ) -> InlineKeyboardButton:
-    """Membuat InlineKeyboardButton dengan dukungan warna (primary/success/danger) & custom emoji ID."""
+    """Membuat InlineKeyboardButton dengan dukungan warna primary/success/danger & custom emoji ID."""
     data = {"text": text}
     if callback_data:
         data["callback_data"] = callback_data
@@ -223,7 +229,7 @@ async def _btn_label_and_icon(setting_key: str, default_emoji: str, label: str) 
 def insufficient_vc_kb(current_vc: int, needed_vc: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            styled_btn("📅 Klaim Absen Harian (+20 VC)", callback_data="claim_daily", style="success"),
+            styled_btn(f"📅 Klaim Absen Harian +{DAILY_REWARD_VC} VC", callback_data="claim_daily", style="success"),
             styled_btn("🎯 Cek Misi Harian", callback_data="daily_quests"),
         ],
         [styled_btn("🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
@@ -234,18 +240,18 @@ async def main_lobby_kb(user_id: int | None = None) -> InlineKeyboardMarkup:
     is_admin_or_owner = await is_staff_or_owner(user_id) if user_id else False
 
     lbl_enter, ico_enter = await _btn_label_and_icon("ico_enter", "🚪", "Verifikasi & Masuk ke Bar")
-    lbl_confess, ico_confess = await _btn_label_and_icon("ico_confess", "🕯️", "Curhat ke CH (#confess)")
-    lbl_pm, ico_pm = await _btn_label_and_icon("ico_pm", "💌", "Kirim PM ke CH (#pm)")
+    lbl_confess, ico_confess = await _btn_label_and_icon("ico_confess", "🕯️", "Curhat Confess")
+    lbl_promote, ico_promote = await _btn_label_and_icon("ico_pm", "📣", "Kirim Promote")
     lbl_wallet, ico_wallet = await _btn_label_and_icon("ico_wallet", "💳", "Kartu Member & Mutasi")
     lbl_daily, ico_daily = await _btn_label_and_icon("ico_daily", "📅", "Absen Harian")
-    lbl_vip, ico_vip = await _btn_label_and_icon("ico_vip", "🍾", "Beli VIP Pass (24 Jam)")
+    lbl_vip, ico_vip = await _btn_label_and_icon("ico_vip", "🍾", "Beli VIP Pass 24 Jam")
     lbl_lapak, ico_lapak = await _btn_label_and_icon("ico_lapak", "🏪", "Pojok Lapak Partner")
 
     rows = [
         [styled_btn(lbl_enter, callback_data="enter_bar", style="primary", icon_emoji_id=ico_enter)],
         [
             styled_btn(lbl_confess, callback_data="menu_confess", icon_emoji_id=ico_confess),
-            styled_btn(lbl_pm, callback_data="menu_pm", icon_emoji_id=ico_pm),
+            styled_btn(lbl_promote, callback_data="menu_promote", icon_emoji_id=ico_promote),
         ],
         [
             styled_btn(lbl_wallet, callback_data="my_wallet", icon_emoji_id=ico_wallet),
@@ -274,8 +280,8 @@ async def main_lobby_kb(user_id: int | None = None) -> InlineKeyboardMarkup:
 def info_categories_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [styled_btn("🥂 Command Bar, Menu VIP & Mini-Game", callback_data="info_cmd_bar")],
-        [styled_btn("🎶 Command Musik & Jukebox (Kaelen)", callback_data="info_cmd_music")],
-        [styled_btn("💼 Panduan Shift Kerja (50 VC)", callback_data="info_cmd_shift")],
+        [styled_btn("🎶 Command Musik & Jukebox Kaelen", callback_data="info_cmd_music")],
+        [styled_btn("💼 Panduan Shift Kerja 50 VC", callback_data="info_cmd_shift")],
         [styled_btn("🎯 Ekonomi VC, Misi & Referral", callback_data="info_economy")],
         [styled_btn("🏠 Kembali ke Lobi Utama", callback_data="back_lobby")],
     ])
