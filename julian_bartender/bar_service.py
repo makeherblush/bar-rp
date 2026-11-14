@@ -13,6 +13,7 @@ from julian_bartender.helpers import (
     bot,
     OWNER_ID,
     BARTENDER_GREETINGS,
+    JULIAN_RC_REPLIES,
     DRINKS_CATALOG,
     FOODS_CATALOG,
     GIFTS_CATALOG,
@@ -53,7 +54,7 @@ async def on_member_join_bar(message: types.Message):
     sent = await message.answer(
         greeting_text,
         parse_mode=ParseMode.HTML,
-        reply_markup=miniapp_menu_kb(is_private=False),
+        reply_markup=miniapp_menu_kb(is_private=False, thread_id=message.message_thread_id),
     )
     await schedule_delete(message.chat.id, [sent.message_id], delay=60)
 
@@ -329,7 +330,7 @@ async def cmd_menu_miniapp(message: types.Message):
         "🥂 <i>Julian meletakkan tablet menu beludru di atas meja bar.</i>\n"
         "Silakan pilih minuman, racik koktail, hidangan, atau lagu jukebox:",
         parse_mode=ParseMode.HTML,
-        reply_markup=miniapp_menu_kb(is_private=False),
+        reply_markup=miniapp_menu_kb(is_private=False, thread_id=message.message_thread_id),
     )
     await schedule_delete(message.chat.id, [message.message_id, msg.message_id], delay=60)
 
@@ -346,7 +347,7 @@ async def cmd_order_drink(message: types.Message):
         msg = await message.reply(
             "🍸 <i>Julian menyodorkan kartu menu ke hadapanmu.</i>",
             parse_mode=ParseMode.HTML,
-            reply_markup=miniapp_menu_kb(),
+            reply_markup=miniapp_menu_kb(is_private=False, thread_id=message.message_thread_id),
         )
         await schedule_delete(message.chat.id, [message.message_id, msg.message_id], delay=60)
         return
@@ -417,7 +418,7 @@ async def cmd_eat_food(message: types.Message):
         msg = await message.reply(
             "🍽️ <i>Julian membukakan daftar hidangan dapur malam ini.</i>",
             parse_mode=ParseMode.HTML,
-            reply_markup=miniapp_menu_kb(),
+            reply_markup=miniapp_menu_kb(is_private=False, thread_id=message.message_thread_id),
         )
         await schedule_delete(message.chat.id, [message.message_id, msg.message_id], delay=60)
         return
@@ -532,3 +533,28 @@ async def cmd_treat_guest(message: types.Message):
         f"🥂 {mention_user(sender.id, sender.first_name)} mentraktir <b>{menu_text}</b> untuk {mention_user(target['user_id'], target['full_name'])} • <b>+5 Charm ✨</b>.{shift_note}",
         parse_mode=ParseMode.HTML,
     )
+
+
+@router.message(F.chat.type.in_({"group", "supergroup"}), F.text, ~F.text.startswith("/"))
+async def on_julian_rp_interaction(message: types.Message):
+    if not message.from_user or message.from_user.is_bot:
+        return
+
+    me = await bot.get_me()
+    bot_username = (me.username or "").lower()
+    text_lower = message.text.lower()
+
+    is_reply_to_julian = bool(
+        message.reply_to_message
+        and message.reply_to_message.from_user
+        and message.reply_to_message.from_user.id == me.id
+    )
+    is_mentioned = bool(bot_username and f"@{bot_username}" in text_lower)
+    is_called_name = "julian" in text_lower.split()
+
+    if not (is_reply_to_julian or is_mentioned or is_called_name):
+        return
+
+    reply_text = random.choice(JULIAN_RC_REPLIES).format(name=html.escape(message.from_user.first_name))
+    sent = await message.reply(reply_text, parse_mode=ParseMode.HTML)
+    await schedule_delete(message.chat.id, [sent.message_id], delay=60)
