@@ -24,12 +24,14 @@ hans_bot = Bot(token=cfg.TOKEN_HANS) if getattr(cfg, "TOKEN_HANS", None) else bo
 
 OWNER_ID = cfg.OWNER_ID
 GROUP_ID = cfg.GROUP_ID
-MINIAPP_MENU_URL = "https://t.me/JulianVanceVH_bot/menu"
+TELEGRAM_DEEP_MINIAPP_URL = "https://t.me/JulianVanceVH_bot/menu"
 WEBAPP_DIRECT_URL = (
-    getattr(cfg, "WEBAPP_URL", None)
+    os.environ.get("MINIAPP_MENU_URL")
+    or getattr(cfg, "MINIAPP_MENU_URL", "")
     or os.environ.get("WEBAPP_URL")
-    or MINIAPP_MENU_URL
-)
+    or getattr(cfg, "WEBAPP_URL", "")
+    or TELEGRAM_DEEP_MINIAPP_URL
+).strip()
 
 SHIFT_MAX_MINUTES = 20
 SHIFT_REQUIRED_ACTIONS = 5
@@ -404,11 +406,12 @@ def mention_user(uid: int, name: str) -> str:
     return f'<a href="tg://user?id={uid}">{html.escape(name)}</a>'
 
 
-def miniapp_menu_kb(is_private: bool = False) -> InlineKeyboardMarkup:
+def miniapp_menu_kb(is_private: bool = False, thread_id: int | None = None) -> InlineKeyboardMarkup:
     if is_private and WEBAPP_DIRECT_URL.startswith("https://") and not WEBAPP_DIRECT_URL.startswith("https://t.me/"):
         btn = styled_btn("🍸 Buka Buku Menu & Jukebox", web_app=WebAppInfo(url=WEBAPP_DIRECT_URL), style="primary")
     else:
-        btn = styled_btn("🍸 Buka Buku Menu & Jukebox", url=MINIAPP_MENU_URL, style="primary")
+        deep_url = f"{TELEGRAM_DEEP_MINIAPP_URL}?startapp=topic_{thread_id}" if (thread_id and thread_id != 1) else TELEGRAM_DEEP_MINIAPP_URL
+        btn = styled_btn("🍸 Buka Buku Menu & Jukebox", url=deep_url, style="primary")
     return InlineKeyboardMarkup(inline_keyboard=[[btn]])
 
 
