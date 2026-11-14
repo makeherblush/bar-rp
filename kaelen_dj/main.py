@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import yt_dlp
-from pyrogram import Client
+from pyrogram import Client, raw
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream, AudioQuality
 
@@ -26,11 +26,9 @@ GROUP_ID = cfg.GROUP_ID
 OWNER_ID = cfg.OWNER_ID
 SONG_REQUEST_COST = 10
 
-# --- BOT & USERBOT CLIENT ---
 bot = Bot(token=cfg.TOKEN_KAELEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Session string / credentials Pyrogram untuk stream audio ke Voice Chat
 SESSION_STRING = getattr(cfg, "KAELEN_SESSION_STRING", None) or getattr(cfg, "SESSION_STRING", None)
 API_ID = int(getattr(cfg, "API_ID", 0))
 API_HASH = str(getattr(cfg, "API_HASH", ""))
@@ -68,6 +66,7 @@ music_queue: deque[TrackItem] = deque()
 current_track: TrackItem | None = None
 is_paused: bool = False
 _play_lock = asyncio.Lock()
+_kaelen_user_id: int | None = None
 
 
 def _mention(uid: int, name: str) -> str:
@@ -96,10 +95,12 @@ async def react_msg(chat_id: int, message_id: int, emoji: str = "🎧"):
         pass
 
 
-async def _schedule_delete(chat_id: int, message_ids: list[int], delay: int = 35):
+async def _schedule_delete(chat_id: int, message_ids: list[int], delay: int = 40):
     async def _worker():
         await asyncio.sleep(delay)
         for mid in message_ids:
+            if not mid:
+                continue
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=mid)
             except Exception:
@@ -124,18 +125,22 @@ async def ensure_kaelen_schema():
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_thread_id BIGINT;")
 
 
-async def _send_kaelen_msg(text: str, thread_id: int | None = None):
-    attempts = [thread_id, None] if thread_id else [None]
+async def _send_kaelen_msg(text: str, thread_id: int | None = None, auto_delete_sec: int | None = 45):
+    clean_tid = thread_id if (thread_id and thread_id != 1) else None
+    attempts = [clean_tid, None] if clean_tid else [None]
     for tid in attempts:
         kwargs = {"message_thread_id": tid} if tid else {}
         try:
-            return await bot.send_message(
+            sent = await bot.send_message(
                 chat_id=GROUP_ID,
                 text=text,
                 parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True,
                 **kwargs,
             )
+            if sent and auto_delete_sec:
+                await _schedule_delete(GROUP_ID, [sent.message_id], delay=auto_delete_sec)
+            return sent
         except Exception as e:
             if tid and "thread not found" in str(e).lower():
                 continue
@@ -143,46 +148,119 @@ async def _send_kaelen_msg(text: str, thread_id: int | None = None):
             return None
 
 
+# === AUTO BUKA OBROLAN SUARA (OS) & AUTO-MUTE KECUALI OWNER ===
+async def ensure_voice_chat_open_and_muted():
+    """Membuka Obrolan Suara grup secara otomatis jika belum aktif & set join_muted=True."""
+    try:
+        peer = await app.resolve_peer(GROUP_ID)
+        full_chat = await app.invoke(raw.functions.channels.GetFullChannel(channel=peer))
+        call = full_chat.full_chat.call
+
+        if call is None:
+            logger.info("OS belum aktif — membuka Obrolan Suara otomatis...")
+            await app.invoke(
+                raw.functions.phone.CreateGroupCall(
+                    peer=peer,
+                    random_id=app.rnd_id(),
+                    title="The Velvet Hour — Lounge Radio",
+                )
+            )
+            await asyncio.sleep(1.2)
+            full_chat = await app.invoke(raw.functions.channels.GetFullChannel(channel=peer))
+            call = full_chat.full_chat.call
+
+        if call is not None:
+            await app.invoke(
+                raw.functions.phone.ToggleGroupCallSettings(
+                    call=call,
+                    join_muted=True,
+                )
+            )
+        return call
+    except Exception as e:
+        logger.error("Gagal membuka/mengatur OS grup: %s", e)
+        return None
+
+
+@app.on_raw_update()
+async def _enforce_os_auto_mute(client: Client, update, users, chats):
+    """Memastikan setiap tamu yang masuk/unmute di OS langsung di-mute kecuali Owner & Kaelen."""
+    if not isinstance(update, raw.types.UpdateGroupCallParticipants):
+        return
+    try:
+        for p in update.participants:
+            if not isinstance(p.peer, raw.types.PeerUser):
+                continue
+            uid = p.peer.user_id
+            if uid == OWNER_ID or uid == _kaelen_user_id:
+                continue
+            if not p.muted and not p.left:
+                part_peer = await client.resolve_peer(uid)
+                await client.invoke(
+                    raw.functions.phone.EditGroupCallParticipant(
+                        call=update.call,
+                        participant=part_peer,
+                        muted=True,
+                    )
+                )
+    except Exception:
+        pass
+
+
+# === PENCARIAN LAGU (YOUTUBE MOBILE CLIENT + SOUNDCLOUD FALLBACK) ===
 def _extract_audio_sync(query: str) -> dict | None:
-    ydl_opts = {
-        "format": "bestaudio/best",
+    is_url = query.startswith(("http://", "https://"))
+    search_targets = [query] if is_url else [f"ytsearch1:{query}", f"scsearch1:{query}"]
+
+    base_opts = {
+        "format": "bestaudio[ext=m4a]/bestaudio/best",
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
-        "default_search": "ytsearch1",
-        "extract_flat": False,
         "geo_bypass": True,
-    }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(query, download=False)
-            if not info:
-                return None
-            if "entries" in info:
-                entries = [e for e in info["entries"] if e]
-                if not entries:
-                    return None
-                info = entries[0]
-
-            stream_url = info.get("url")
-            if not stream_url:
-                for fmt in reversed(info.get("formats", [])):
-                    if fmt.get("acodec") != "none" and fmt.get("url"):
-                        stream_url = fmt["url"]
-                        break
-
-            if not stream_url:
-                return None
-
-            return {
-                "title": info.get("title") or query,
-                "stream_url": stream_url,
-                "webpage_url": info.get("webpage_url") or "",
-                "duration": _format_duration(info.get("duration")),
+        "nocheckcertificate": True,
+        "source_address": "0.0.0.0",
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "ios", "web"],
+                "skip": ["hls", "dash"],
             }
-    except Exception as e:
-        logger.error("yt-dlp extract error untuk '%s': %s", query, e)
-        return None
+        },
+    }
+
+    for target in search_targets:
+        try:
+            with yt_dlp.YoutubeDL(base_opts) as ydl:
+                info = ydl.extract_info(target, download=False)
+                if not info:
+                    continue
+                if "entries" in info:
+                    entries = [e for e in (info.get("entries") or []) if e]
+                    if not entries:
+                        continue
+                    info = entries[0]
+
+                stream_url = info.get("url")
+                if not stream_url:
+                    for fmt in reversed(info.get("formats") or []):
+                        if fmt.get("acodec") not in (None, "none") and fmt.get("url"):
+                            stream_url = fmt["url"]
+                            break
+
+                if not stream_url:
+                    continue
+
+                return {
+                    "title": info.get("title") or query,
+                    "stream_url": stream_url,
+                    "webpage_url": info.get("webpage_url") or "",
+                    "duration": _format_duration(info.get("duration")),
+                }
+        except Exception as e:
+            logger.warning("Pencarian gagal pada target '%s': %s", target, e)
+            continue
+
+    return None
 
 
 async def extract_audio_info(query: str) -> dict | None:
@@ -222,6 +300,9 @@ async def _play_next_in_queue():
         if next_track.db_req_id:
             await _mark_db_song_status(next_track.db_req_id, "playing")
 
+        # Pastikan Obrolan Suara (OS) terbuka & auto-mute aktif sebelum play
+        await ensure_voice_chat_open_and_muted()
+
         try:
             stream = MediaStream(
                 next_track.stream_url,
@@ -238,15 +319,18 @@ async def _play_next_in_queue():
             await _send_kaelen_msg(
                 f"🎧 <b>Now Spinning — Kaelen Booth</b>\n"
                 f"• Lagu: {link_part} (<code>{next_track.duration}</code>)\n"
-                f"• Permintaan: {_mention(next_track.requester_id, next_track.requester_name)}",
+                f"• Permintaan: {_mention(next_track.requester_id, next_track.requester_name)}\n"
+                f"<i>(Obrolan Suara dibuka dalam mode pendengar)</i>",
                 thread_id=next_track.thread_id,
+                auto_delete_sec=50,
             )
         except Exception as e:
             logger.error("PyTgCalls play error: %s", e)
             await _send_kaelen_msg(
-                f"⚠️ Kaelen gagal memutar <b>{html.escape(next_track.title)}</b> di Voice Chat. Pastikan <b>Obrolan Suara (Voice Chat)</b> grup sedang aktif!\n"
+                f"⚠️ Kaelen gagal memutar <b>{html.escape(next_track.title)}</b> di Obrolan Suara.\n"
                 f"<i>({html.escape(str(e))})</i>",
                 thread_id=next_track.thread_id,
+                auto_delete_sec=25,
             )
             current_track = None
             if music_queue:
@@ -255,7 +339,6 @@ async def _play_next_in_queue():
 
 @call_py.on_update()
 async def on_tgcalls_update(_, update):
-    # Deteksi otomatis ketika audio selesai diputar agar lanjut ke lagu berikutnya
     update_name = type(update).__name__
     if "StreamEnded" in update_name or "StreamAudioEnded" in update_name:
         await _play_next_in_queue()
@@ -276,6 +359,7 @@ async def enqueue_song_request(
         await _send_kaelen_msg(
             f"🥀 Kaelen tidak menemukan piringan hitam untuk <b>{html.escape(query)}</b>.",
             thread_id=thread_id,
+            auto_delete_sec=25,
         )
         return False
 
@@ -295,18 +379,16 @@ async def enqueue_song_request(
         await _play_next_in_queue()
     elif announce_queue:
         pos = len(music_queue)
-        msg = await _send_kaelen_msg(
+        await _send_kaelen_msg(
             f"💿 <b>Ditambahkan ke Antrean (#{pos})</b>\n"
             f"• Lagu: <b>{html.escape(track.title)}</b> (<code>{track.duration}</code>)\n"
             f"• Oleh: {_mention(uid, requester_name)}",
             thread_id=thread_id,
+            auto_delete_sec=35,
         )
-        if msg:
-            await _schedule_delete(GROUP_ID, [msg.message_id], delay=35)
     return True
 
 
-# --- WORKER POLLING ANTREAN LAGU DARI MINI APP JUKEBOX ---
 async def _poll_webapp_song_queue():
     await asyncio.sleep(3)
     while True:
@@ -330,7 +412,6 @@ async def _poll_webapp_song_queue():
                 rname = r["requester_name"] or "Tamu Lounge"
                 title = r["song_title"]
                 tid = r["thread_id"]
-                logger.info("Menerima request lagu dari Mini App: %s (oleh %s)", title, rname)
                 await enqueue_song_request(
                     query=title,
                     uid=uid,
@@ -345,7 +426,6 @@ async def _poll_webapp_song_queue():
         await asyncio.sleep(3)
 
 
-# --- COMMANDS GRUP KAELEN DJ ---
 @dp.message(Command("play", "reqsong"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_play_song(message: types.Message):
     user = message.from_user
@@ -373,7 +453,7 @@ async def cmd_play_song(message: types.Message):
             """, user.id, user.username, user.full_name, message.message_thread_id)
 
             row = await conn.fetchrow("SELECT coins, is_vip, vip_until FROM users WHERE user_id = $1 FOR UPDATE", user.id)
-            is_vip = bool(row and row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
+            is_vip = bool(row and row["is_vip"] and (row["vip_until"] is None or row["vip_until"] > datetime.utcnow()))
             cost = 0 if is_vip else SONG_REQUEST_COST
             coins = (row["coins"] or 0) if row else 0
 
@@ -549,13 +629,16 @@ async def register_kaelen_commands():
 
 
 async def main():
+    global _kaelen_user_id
     await db.init_db()
     await ensure_kaelen_schema()
     await register_kaelen_commands()
 
     await app.start()
+    me = await app.get_me()
+    _kaelen_user_id = me.id
     await call_py.start()
-    logger.info("Kaelen Pyrogram & PyTgCalls aktif!")
+    logger.info("Kaelen Pyrogram (@%s) & PyTgCalls aktif!", me.username)
 
     asyncio.create_task(_poll_webapp_song_queue())
     await dp.start_polling(bot)
