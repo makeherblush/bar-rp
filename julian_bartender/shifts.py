@@ -6,7 +6,7 @@ from aiogram.filters import Command, CommandObject
 from aiogram.enums import ParseMode
 
 import shared.database as db
-from shared.config import OWNER_ID, GROUP_ID
+from shared.config import OWNER_ID
 from julian_bartender.helpers import (
     bot,
     hans_bot,
@@ -15,6 +15,7 @@ from julian_bartender.helpers import (
     SHIFT_REWARD_VC,
     MAX_SHIFTS_PER_DAY,
     SHIFT_ROLES,
+    sync_tg_user,
     set_guest_tag,
     restore_default_guest_tag,
     update_member_shift_commands,
@@ -40,13 +41,13 @@ async def get_active_shift(user_id: int):
         return row
 
 
-# --- LAMAR, CEK PROGRES & AKHIRI SHIFT ---
-@router.message(Command("apply"), F.chat.id == GROUP_ID)
+@router.message(Command("apply"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_apply(message: types.Message, command: CommandObject):
     role = (command.args or "").strip().lower()
     now = datetime.utcnow()
 
     async with db.pool.acquire() as conn:
+        await sync_tg_user(conn, message.from_user, message.message_thread_id)
         await conn.execute("DELETE FROM active_shifts WHERE ends_at <= $1", now)
         counts_rows = await conn.fetch("SELECT role_name, COUNT(*) as cnt FROM active_shifts GROUP BY role_name")
         counts = {r["role_name"]: r["cnt"] for r in counts_rows}
@@ -124,8 +125,8 @@ async def cmd_apply(message: types.Message, command: CommandObject):
             ends_at,
         )
 
-    await set_guest_tag(GROUP_ID, user_id, meta["tag"])
-    await update_member_shift_commands(user_id, role)
+    await set_guest_tag(message.chat.id, user_id, meta["tag"])
+    await update_member_shift_commands(user_id, role, message.chat.id)
 
     await message.answer(
         f"💼 <b>SHIFT DIMULAI — {meta['title'].upper()}</b>\n\n"
@@ -139,7 +140,7 @@ async def cmd_apply(message: types.Message, command: CommandObject):
     )
 
 
-@router.message(Command("myshift"), F.chat.id == GROUP_ID)
+@router.message(Command("myshift"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_myshift(message: types.Message):
     shift = await get_active_shift(message.from_user.id)
     if not shift:
@@ -170,7 +171,7 @@ async def cmd_myshift(message: types.Message):
     )
 
 
-@router.message(Command("endshift"), F.chat.id == GROUP_ID)
+@router.message(Command("endshift"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_endshift(message: types.Message):
     user_id = message.from_user.id
     async with db.pool.acquire() as conn:
@@ -195,14 +196,13 @@ async def cmd_endshift(message: types.Message):
                 f"<i>Upah tidak cair karena layanan baru mencapai {srv_count}/{SHIFT_REQUIRED_ACTIONS} kali.</i>"
             )
 
-        await restore_default_guest_tag(conn, GROUP_ID, user_id)
+        await restore_default_guest_tag(conn, message.chat.id, user_id)
 
-    await update_member_shift_commands(user_id, None)
+    await update_member_shift_commands(user_id, None, message.chat.id)
     await message.answer(msg_txt, parse_mode=ParseMode.HTML)
 
 
-# --- AKSI STAF PARUH WAKTU ---
-@router.message(Command("mix"), F.chat.id == GROUP_ID)
+@router.message(Command("mix"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_mix(message: types.Message, command: CommandObject):
     shift = await get_active_shift(message.from_user.id)
     if (not shift or shift["role_name"] != "bartender") and not await is_staff_or_owner(message.from_user.id):
@@ -219,7 +219,7 @@ async def cmd_mix(message: types.Message, command: CommandObject):
     )
 
 
-@router.message(Command("sober"), F.chat.id == GROUP_ID)
+@router.message(Command("sober"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_sober(message: types.Message, command: CommandObject):
     shift = await get_active_shift(message.from_user.id)
     if (not shift or shift["role_name"] != "bartender") and not await is_staff_or_owner(message.from_user.id):
@@ -238,7 +238,7 @@ async def cmd_sober(message: types.Message, command: CommandObject):
     )
 
 
-@router.message(Command("welcome"), F.chat.id == GROUP_ID)
+@router.message(Command("welcome"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_welcome_staff(message: types.Message, command: CommandObject):
     shift = await get_active_shift(message.from_user.id)
     if (not shift or shift["role_name"] != "waiter") and not await is_staff_or_owner(message.from_user.id):
@@ -257,7 +257,7 @@ async def cmd_welcome_staff(message: types.Message, command: CommandObject):
     )
 
 
-@router.message(Command("dish"), F.chat.id == GROUP_ID)
+@router.message(Command("dish"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_dish(message: types.Message, command: CommandObject):
     shift = await get_active_shift(message.from_user.id)
     if (not shift or shift["role_name"] != "waiter") and not await is_staff_or_owner(message.from_user.id):
@@ -274,7 +274,7 @@ async def cmd_dish(message: types.Message, command: CommandObject):
     )
 
 
-@router.message(Command("ambience"), F.chat.id == GROUP_ID)
+@router.message(Command("ambience"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_ambience(message: types.Message):
     shift = await get_active_shift(message.from_user.id)
     if (not shift or shift["role_name"] != "host") and not await is_staff_or_owner(message.from_user.id):
@@ -288,7 +288,7 @@ async def cmd_ambience(message: types.Message):
     )
 
 
-@router.message(Command("toastall"), F.chat.id == GROUP_ID)
+@router.message(Command("toastall"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_toastall(message: types.Message):
     shift = await get_active_shift(message.from_user.id)
     if (not shift or shift["role_name"] != "host") and not await is_staff_or_owner(message.from_user.id):
@@ -302,15 +302,14 @@ async def cmd_toastall(message: types.Message):
     )
 
 
-# --- MODERASI ADMIN & OWNER ---
-@router.message(Command("mute"), F.chat.id == GROUP_ID)
+@router.message(Command("mute"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_mute(message: types.Message):
     if not await is_staff_or_owner(message.from_user.id) or not message.reply_to_message:
         return
     target = message.reply_to_message.from_user
     until = datetime.utcnow() + timedelta(minutes=15)
     try:
-        await bot.restrict_chat_member(GROUP_ID, target.id, types.ChatPermissions(can_send_messages=False), until_date=until)
+        await bot.restrict_chat_member(message.chat.id, target.id, types.ChatPermissions(can_send_messages=False), until_date=until)
         await message.answer(
             f"🔇 <i>Bouncer Hans melangkah mendekat ke meja <b>{html.escape(target.first_name)}</b> dan memberi isyarat tenang.</i>\n\n"
             f"<b>\"Harap tenangkan diri selama 15 menit sebelum kembali berbincang.\"</b>",
@@ -320,14 +319,14 @@ async def cmd_mute(message: types.Message):
         await reply_and_autodelete(message, f"Gagal mute: {e}", 30)
 
 
-@router.message(Command("kick"), F.chat.id == GROUP_ID)
+@router.message(Command("kick"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_kick(message: types.Message):
     if not await is_staff_or_owner(message.from_user.id) or not message.reply_to_message:
         return
     target = message.reply_to_message.from_user
     try:
-        await hans_bot.ban_chat_member(GROUP_ID, target.id)
-        await hans_bot.unban_chat_member(GROUP_ID, target.id)
+        await hans_bot.ban_chat_member(message.chat.id, target.id)
+        await hans_bot.unban_chat_member(message.chat.id, target.id)
         async with db.pool.acquire() as conn:
             await conn.execute("UPDATE users SET is_in_bar = FALSE, vip_booth_name = NULL WHERE user_id = $1", target.id)
         await message.answer(
@@ -338,7 +337,7 @@ async def cmd_kick(message: types.Message):
         await reply_and_autodelete(message, f"Gagal kick: {e}", 30)
 
 
-@router.message(Command("round"), F.chat.id == GROUP_ID)
+@router.message(Command("round"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_round(message: types.Message):
     if message.from_user.id != OWNER_ID:
         return
