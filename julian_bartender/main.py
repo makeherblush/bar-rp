@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timedelta
 
 from aiogram import Dispatcher, F, types
+from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     BotCommand,
@@ -36,12 +37,36 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("julian_bartender")
 
 dp = Dispatcher(storage=MemoryStorage())
+
+
+@dp.update.outer_middleware()
+async def trace_all_updates(handler, event: types.Update, data: dict):
+    msg = event.message or event.edited_message
+    if msg:
+        logger.info(
+            "TRACE_MSG | chat=%s type=%s thread=%s from=%s is_bot=%s text=%r",
+            msg.chat.id,
+            msg.chat.type,
+            msg.message_thread_id,
+            msg.from_user.id if msg.from_user else None,
+            msg.from_user.is_bot if msg.from_user else None,
+            msg.text,
+        )
+    return await handler(event, data)
+
+
+@dp.message(Command("ping"))
+async def cmd_ping_test(message: types.Message):
+    await message.reply(
+        f"🥂 Pong! Julian aktif.\nChat ID: <code>{message.chat.id}</code>\nThread ID: <code>{message.message_thread_id}</code>",
+        parse_mode="HTML",
+    )
+
+
 dp.include_router(vip_booth_router)
 dp.include_router(bar_service_router)
 dp.include_router(games_router)
 dp.include_router(shifts_router)
-
-_last_chat_earn: dict[int, datetime] = {}
 
 
 async def _sync_member_tags_worker():
@@ -87,32 +112,6 @@ async def _sync_member_tags_worker():
             logger.warning("Tag sync worker skip: %s", e)
 
         await asyncio.sleep(30)
-
-
-@dp.message(F.chat.type.in_({"group", "supergroup"}), F.text)
-async def passive_rp_coin_earner(message: types.Message):
-    if not message.from_user or message.from_user.is_bot:
-        return
-    if message.text.startswith("/"):
-        return
-
-    uid = message.from_user.id
-    now = datetime.utcnow()
-    last = _last_chat_earn.get(uid)
-    earn_delta = 1 if (len(message.text.split()) >= 3 and (not last or (now - last).total_seconds() >= 60)) else 0
-    if earn_delta:
-        _last_chat_earn[uid] = now
-
-    async with db.pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO users (user_id, username, full_name, coins, charm_points, last_thread_id)
-            VALUES ($1, $2, $3, $4, 0, $5)
-            ON CONFLICT (user_id) DO UPDATE SET
-                username = COALESCE(EXCLUDED.username, users.username),
-                full_name = EXCLUDED.full_name,
-                coins = users.coins + $6,
-                last_thread_id = COALESCE($5, users.last_thread_id);
-        """, uid, message.from_user.username, message.from_user.full_name, 50 + earn_delta, message.message_thread_id, earn_delta)
 
 
 async def register_julian_commands():
@@ -179,8 +178,8 @@ async def main():
     await register_julian_commands()
     await bot.delete_webhook(drop_pending_updates=False)
     asyncio.create_task(_sync_member_tags_worker())
-    logger.info("Julian Vance bot mulai polling...")
-    await dp.start_polling(bot)
+    logger.info("Julian Vance bot V2 mulai polling...")
+    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 
 if __name__ == "__main__":
