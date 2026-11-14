@@ -36,57 +36,29 @@ CACHE_DIR = "/tmp/kaelen_cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 
-def _resolve_warehouse_channel() -> int | str | None:
-    keys = (
-        "MUSIC_CHANNEL_ID",
-        "WAREHOUSE_CHANNEL_ID",
-        "GUDANG_CHANNEL_ID",
-        "MUSIC_WAREHOUSE_ID",
-        "GUDANG_MUSIK_ID",
-        "STORAGE_CHANNEL_ID",
-        "DB_CHANNEL_ID",
-    )
-    for k in keys:
-        val = getattr(cfg, k, None) or os.environ.get(k)
-        if val:
-            s = str(val).strip()
-            if s.lstrip("-").isdigit():
-                return int(s)
-            return s
-    return None
+def _get_music_vault_id() -> int | str | None:
+    raw = getattr(cfg, "MUSIC_VAULT_ID", None) or os.environ.get("MUSIC_VAULT_ID")
+    if not raw:
+        return None
+    val = str(raw).strip()
+    return int(val) if val.lstrip("-").isdigit() else val
 
 
-WAREHOUSE_CHANNEL_ID = _resolve_warehouse_channel()
+MUSIC_VAULT_ID = _get_music_vault_id()
 
 bot = Bot(token=cfg.TOKEN_KAELEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-ASSISTANT_SESSION = (
-    getattr(cfg, "KAELEN_ASSISTANT_SESSION", None)
-    or getattr(cfg, "ASSISTANT_SESSION", None)
-    or getattr(cfg, "SESSION_ASSISTANT", None)
-    or getattr(cfg, "KAELEN_SESSION_STRING", None)
-    or getattr(cfg, "SESSION_STRING", None)
-    or os.environ.get("SESSION_STRING")
-    or os.environ.get("ASSISTANT_SESSION")
-)
+SESSION_STRING = getattr(cfg, "SESSION_STRING", None) or os.environ.get("SESSION_STRING")
 API_ID = int(getattr(cfg, "API_ID", 0) or os.environ.get("API_ID", 0))
 API_HASH = str(getattr(cfg, "API_HASH", "") or os.environ.get("API_HASH", ""))
 
-if ASSISTANT_SESSION:
-    assistant = Client(
-        name="kaelen_assistant",
-        api_id=API_ID,
-        api_hash=API_HASH,
-        session_string=ASSISTANT_SESSION,
-    )
-else:
-    assistant = Client(
-        name="kaelen_assistant",
-        api_id=API_ID,
-        api_hash=API_HASH,
-    )
-
+assistant = Client(
+    name="kaelen_assistant",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    session_string=SESSION_STRING,
+)
 call_py = PyTgCalls(assistant)
 
 
@@ -100,13 +72,14 @@ class TrackItem:
     requester_name: str
     thread_id: int | None = None
     db_req_id: int | None = None
-    is_local_file: bool = False
+    source_label: str = "Music Vault"
 
 
 music_queue: deque[TrackItem] = deque()
 current_track: TrackItem | None = None
 is_paused: bool = False
 _play_lock = asyncio.Lock()
+_tg_bot_lock = asyncio.Lock()
 _bg_tasks: set[asyncio.Task] = set()
 _assistant_user_id: int = 0
 
@@ -143,6 +116,38 @@ def _cleanup_old_cache(keep_path: str | None = None):
                 pass
     except Exception:
         pass
+
+
+def _extract_audio_meta(msg, fallback_title: str) -> tuple[bool, str, int | None]:
+    media_obj = msg.audio or msg.document or msg.voice
+    if not media_obj:
+        return False, fallback_title, None
+
+    if msg.document and not msg.audio:
+        fname = (msg.document.file_name or "").lower()
+        mime = (msg.document.mime_type or "").lower()
+        if not (mime.startswith("audio/") or fname.endswith((".mp3", ".m4a", ".flac", ".ogg", ".wav", ".opus"))):
+            return False, fallback_title, None
+
+    raw_title = (
+        getattr(msg.audio, "title", None)
+        or getattr(msg.audio, "file_name", None)
+        or getattr(msg.document, "file_name", None)
+        or (msg.caption.splitlines()[0] if msg.caption else None)
+        or fallback_title
+    )
+    performer = getattr(msg.audio, "performer", None)
+    display_title = (
+        f"{raw_title} - {performer}"
+        if (performer and performer.lower() not in raw_title.lower())
+        else raw_title
+    )
+    for ext in (".mp3", ".m4a", ".flac", ".ogg", ".wav", ".opus"):
+        if display_title.lower().endswith(ext):
+            display_title = display_title[:-len(ext)]
+
+    duration_sec = getattr(msg.audio, "duration", None) or getattr(msg.voice, "duration", None)
+    return True, display_title, duration_sec
 
 
 async def react_msg(chat_id: int, message_id: int, emoji: str = "🎧"):
@@ -209,7 +214,7 @@ async def _send_kaelen_msg(text: str, thread_id: int | None = None, auto_delete:
             return None
 
 
-# --- AKUN ASISTEN: BUKA OS OTOMATIS & AUTO-MUTE PENDENGAR (KECUALI OWNER & ASISTEN) ---
+# --- AUTO-OPEN OS & AUTO-MUTE PENDENGAR (KECUALI OWNER & ASISTEN) ---
 async def _ensure_voice_chat_open_and_muted():
     try:
         peer = await assistant.resolve_peer(GROUP_ID)
@@ -241,7 +246,7 @@ async def _ensure_voice_chat_open_and_muted():
                 pass
         return call
     except Exception as e:
-        logger.error("Akun asisten gagal membuka/mengatur OS: %s", e)
+        logger.error("Gagal membuka/mengatur OS: %s", e)
         return None
 
 
@@ -283,250 +288,170 @@ async def _enforce_os_listener_mute(client: Client, update, users, chats):
         pass
 
 
-# --- 1. PENCARIAN DI GUDANG CHANNEL MUSIK TELEGRAM ---
-async def _search_warehouse_channel(query: str) -> dict | None:
-    if not WAREHOUSE_CHANNEL_ID:
+# --- JALUR 1: MUSIC_VAULT_ID (GUDANG CHANNEL MUSIK) ---
+async def _search_music_vault(query: str) -> dict | None:
+    if not MUSIC_VAULT_ID:
+        logger.warning("MUSIC_VAULT_ID belum terpasang!")
         return None
     try:
-        async for msg in assistant.search_messages(chat_id=WAREHOUSE_CHANNEL_ID, query=query, limit=8):
-            media_obj = msg.audio or msg.document or msg.voice
-            if not media_obj:
+        async for msg in assistant.search_messages(chat_id=MUSIC_VAULT_ID, query=query, limit=10):
+            is_audio, display_title, duration_sec = _extract_audio_meta(msg, query)
+            if not is_audio:
                 continue
 
-            if msg.document and not msg.audio:
-                fname = (msg.document.file_name or "").lower()
-                mime = (msg.document.mime_type or "").lower()
-                if not (mime.startswith("audio/") or fname.endswith((".mp3", ".m4a", ".flac", ".ogg", ".wav", ".opus"))):
-                    continue
-
-            raw_title = (
-                getattr(msg.audio, "title", None)
-                or getattr(msg.audio, "file_name", None)
-                or getattr(msg.document, "file_name", None)
-                or (msg.caption.splitlines()[0] if msg.caption else None)
-                or query
-            )
-            performer = getattr(msg.audio, "performer", None)
-            display_title = f"{raw_title} - {performer}" if (performer and performer.lower() not in raw_title.lower()) else raw_title
-            for ext in (".mp3", ".m4a", ".flac", ".ogg", ".wav", ".opus"):
-                if display_title.lower().endswith(ext):
-                    display_title = display_title[:-len(ext)]
-
-            duration_sec = getattr(msg.audio, "duration", None) or getattr(msg.voice, "duration", None)
-            dest_path = os.path.join(CACHE_DIR, f"wh_{msg.id}_{int(datetime.utcnow().timestamp())}")
+            dest_path = os.path.join(CACHE_DIR, f"vault_{msg.id}_{int(datetime.utcnow().timestamp())}")
             downloaded_path = await assistant.download_media(msg, file_name=dest_path)
-
             if downloaded_path and os.path.exists(downloaded_path):
                 _cleanup_old_cache(keep_path=downloaded_path)
-                logger.info("Lagu ditemukan di Gudang Channel Musik: %s", display_title)
+                logger.info("Lagu ditemukan di MUSIC_VAULT_ID: %s", display_title)
                 return {
                     "title": display_title,
                     "stream_url": downloaded_path,
                     "webpage_url": msg.link or "",
                     "duration": _format_duration(duration_sec),
-                    "is_local_file": True,
+                    "source_label": "Music Vault",
                 }
     except Exception as e:
-        logger.warning("Gagal mencari di gudang channel musik (%s): %s", WAREHOUSE_CHANNEL_ID, e)
+        logger.warning("Gagal mencari di MUSIC_VAULT_ID (%s): %s", MUSIC_VAULT_ID, e)
     return None
 
 
-# --- 2. PENCARIAN ONLINE (JIOSAAVN, PIPED, YOUTUBE, SOUNDCLOUD) ---
-def _get_cookie_file_path() -> str | None:
-    if os.path.exists("cookies.txt"):
-        return "cookies.txt"
-    env_cookies = os.environ.get("YT_COOKIES") or os.environ.get("YOUTUBE_COOKIES")
-    if env_cookies and "youtube.com" in env_cookies:
-        path = "/tmp/yt_cookies.txt"
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(env_cookies)
-        return path
+# --- JALUR 2: BOT MUSIK TELEGRAM -> SIMPAN KE MUSIC_VAULT_ID ---
+async def _fetch_via_tg_music_bot(query: str) -> dict | None:
+    music_bots = ["vkmusic_bot", "SpotSeekBot"]
+    async with _tg_bot_lock:
+        for bot_usn in music_bots:
+            try:
+                last_id = 0
+                async for m in assistant.get_chat_history(bot_usn, limit=1):
+                    last_id = m.id
+
+                await assistant.send_message(bot_usn, query)
+                target_audio_msg = None
+                clicked = False
+
+                for _ in range(12):
+                    await asyncio.sleep(1.0)
+                    recent = []
+                    async for m in assistant.get_chat_history(bot_usn, limit=6):
+                        if m.id <= last_id:
+                            break
+                        if not m.outgoing:
+                            recent.append(m)
+
+                    for m in recent:
+                        is_audio, _, _ = _extract_audio_meta(m, query)
+                        if is_audio:
+                            target_audio_msg = m
+                            break
+                    if target_audio_msg:
+                        break
+
+                    if not clicked:
+                        for m in recent:
+                            if m.reply_markup and getattr(m.reply_markup, "inline_keyboard", None):
+                                for row in m.reply_markup.inline_keyboard:
+                                    btn = row[0] if row else None
+                                    if btn and getattr(btn, "callback_data", None):
+                                        try:
+                                            await assistant.request_callback_answer(
+                                                chat_id=bot_usn,
+                                                message_id=m.id,
+                                                callback_data=btn.callback_data,
+                                            )
+                                            clicked = True
+                                            break
+                                        except Exception:
+                                            pass
+                                    if clicked:
+                                        break
+
+                if not target_audio_msg:
+                    continue
+
+                is_audio, display_title, duration_sec = _extract_audio_meta(target_audio_msg, query)
+                if not is_audio:
+                    continue
+
+                archived_link = ""
+                if MUSIC_VAULT_ID:
+                    try:
+                        copied = await assistant.copy_message(
+                            chat_id=MUSIC_VAULT_ID,
+                            from_chat_id=bot_usn,
+                            message_id=target_audio_msg.id,
+                        )
+                        archived_link = getattr(copied, "link", "") or ""
+                        logger.info("Lagu '%s' disimpan ke MUSIC_VAULT_ID.", display_title)
+                    except Exception as arch_err:
+                        logger.debug("Skip simpan ke vault: %s", arch_err)
+
+                dest_path = os.path.join(CACHE_DIR, f"tgbot_{target_audio_msg.id}_{int(datetime.utcnow().timestamp())}")
+                downloaded_path = await assistant.download_media(target_audio_msg, file_name=dest_path)
+                if downloaded_path and os.path.exists(downloaded_path):
+                    _cleanup_old_cache(keep_path=downloaded_path)
+                    return {
+                        "title": display_title,
+                        "stream_url": downloaded_path,
+                        "webpage_url": archived_link,
+                        "duration": _format_duration(duration_sec),
+                        "source_label": "Music Vault",
+                    }
+            except Exception as e:
+                logger.warning("Gagal ambil dari @%s: %s", bot_usn, e)
+                continue
     return None
 
 
-def _http_get_json(url: str, timeout: int = 8) -> dict | list | None:
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="ignore"))
-
-
+# --- JALUR 3: STREAMING CADANGAN ---
 def _search_jiosaavn_sync(query: str) -> dict | None:
     encoded = urllib.parse.quote_plus(query)
-    endpoints = [
+    for api_url in (
         f"https://saavn.dev/api/search/songs?query={encoded}&limit=1",
         f"https://jiosaavn-api-privatecvc2.vercel.app/search/songs?query={encoded}&limit=1",
-    ]
-    for api_url in endpoints:
+    ):
         try:
-            data = _http_get_json(api_url, timeout=8)
-            if not isinstance(data, dict):
-                continue
-            results = (data.get("data") or {}).get("results") or []
+            req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            results = ((data or {}).get("data") or {}).get("results") or []
             if not results:
                 continue
             song = results[0]
             dl_urls = song.get("downloadUrl") or []
-            if not dl_urls:
-                continue
-            best_url = dl_urls[-1].get("url") or dl_urls[-1].get("link")
+            best_url = dl_urls[-1].get("url") or dl_urls[-1].get("link") if dl_urls else None
             if not best_url:
                 continue
-
             artists = ", ".join(
                 a.get("name", "") for a in ((song.get("artists") or {}).get("primary") or []) if a.get("name")
             )
             title = html.unescape(song.get("name") or query)
-            full_title = f"{title} - {artists}" if artists else title
             return {
-                "title": full_title,
+                "title": f"{title} - {artists}" if artists else title,
                 "stream_url": best_url,
                 "webpage_url": song.get("url") or "",
                 "duration": _format_duration(song.get("duration")),
-                "is_local_file": False,
+                "source_label": "Streaming",
             }
         except Exception:
             continue
-    return None
-
-
-def _search_piped_sync(query: str) -> dict | None:
-    encoded = urllib.parse.quote_plus(query)
-    instances = [
-        "https://pipedapi.kavin.rocks",
-        "https://pipedapi.tokhmi.xyz",
-        "https://pipedapi.moomoo.me",
-        "https://api.piped.private.coffee",
-    ]
-    for base in instances:
-        try:
-            search_data = _http_get_json(f"{base}/search?q={encoded}&filter=music_songs", timeout=7)
-            items = (search_data or {}).get("items") or []
-            if not items:
-                continue
-            vid_url = items[0].get("url", "")
-            vid_id = vid_url.split("v=")[-1].split("&")[0] if "v=" in vid_url else ""
-            if not vid_id:
-                continue
-
-            stream_data = _http_get_json(f"{base}/streams/{vid_id}", timeout=7)
-            audio_streams = (stream_data or {}).get("audioStreams") or []
-            if not audio_streams:
-                continue
-            audio_streams.sort(key=lambda x: x.get("bitrate", 0), reverse=True)
-            best_audio = audio_streams[0].get("url")
-            if not best_audio:
-                continue
-
-            return {
-                "title": stream_data.get("title") or items[0].get("title") or query,
-                "stream_url": best_audio,
-                "webpage_url": f"https://www.youtube.com/watch?v={vid_id}",
-                "duration": _format_duration(stream_data.get("duration")),
-                "is_local_file": False,
-            }
-        except Exception:
-            continue
-    return None
-
-
-def _extract_ytdlp_sync(target: str, cookie_file: str | None = None) -> dict | None:
-    opts = {
-        "format": "bestaudio[ext=m4a]/bestaudio/best",
-        "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
-        "extract_flat": False,
-        "geo_bypass": True,
-        "nocheckcertificate": True,
-        "source_address": "0.0.0.0",
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["ios", "android", "mweb"],
-            }
-        },
-    }
-    if cookie_file:
-        opts["cookiefile"] = cookie_file
-
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(target, download=False)
-        if not info:
-            return None
-        if "entries" in info:
-            entries = [e for e in info["entries"] if e]
-            if not entries:
-                return None
-            info = entries[0]
-
-        stream_url = info.get("url")
-        if not stream_url:
-            for fmt in reversed(info.get("formats", [])):
-                if fmt.get("acodec") != "none" and fmt.get("url"):
-                    stream_url = fmt["url"]
-                    break
-
-        if not stream_url:
-            return None
-
-        return {
-            "title": info.get("title") or target,
-            "stream_url": stream_url,
-            "webpage_url": info.get("webpage_url") or "",
-            "duration": _format_duration(info.get("duration")),
-            "is_local_file": False,
-        }
-
-
-def _extract_online_sync(query: str) -> dict | None:
-    is_url = query.startswith(("http://", "https://"))
-    cookie_file = _get_cookie_file_path()
-
-    if is_url or cookie_file:
-        try:
-            target = query if is_url else f"ytsearch1:{query}"
-            res = _extract_ytdlp_sync(target, cookie_file)
-            if res:
-                return res
-        except Exception as e:
-            logger.warning("yt-dlp primary gagal untuk '%s': %s", query, e)
-
-    if not is_url:
-        saavn_res = _search_jiosaavn_sync(query)
-        if saavn_res:
-            return saavn_res
-
-        piped_res = _search_piped_sync(query)
-        if piped_res:
-            return piped_res
-
-        for fallback_target in (f"ytsearch1:{query}", f"scsearch1:{query}"):
-            try:
-                res = _extract_ytdlp_sync(fallback_target, cookie_file)
-                if res:
-                    return res
-            except Exception as e:
-                logger.warning("Pencarian fallback gagal (%s): %s", fallback_target, e)
-
     return None
 
 
 async def resolve_audio_track(query: str) -> dict | None:
-    is_url = query.startswith(("http://", "https://"))
-    # Prioritas 1: Cek Gudang Channel Musik terlebih dahulu
-    if not is_url:
-        wh_res = await _search_warehouse_channel(query)
-        if wh_res:
-            return wh_res
+    # 1. Cek MUSIC_VAULT_ID terlebih dahulu
+    vault_res = await _search_music_vault(query)
+    if vault_res:
+        return vault_res
 
-    # Prioritas 2: Cari dari sumber online
+    # 2. Ambil lewat bot musik Telegram & arsipkan ke MUSIC_VAULT_ID
+    tg_bot_res = await _fetch_via_tg_music_bot(query)
+    if tg_bot_res:
+        return tg_bot_res
+
+    # 3. Cadangan streaming
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _extract_online_sync, query)
+    return await loop.run_in_executor(None, _search_jiosaavn_sync, query)
 
 
 async def _mark_db_song_status(req_id: int | None, status: str):
@@ -577,9 +502,8 @@ async def _play_next_in_queue():
                 if next_track.webpage_url
                 else f"<b>{html.escape(next_track.title)}</b>"
             )
-            source_badge = "📀 Gudang Koleksi" if next_track.is_local_file else "🌐 Streaming"
             await _send_kaelen_msg(
-                f"🎧 <b>Now Spinning — Kaelen Booth</b> ({source_badge})\n"
+                f"🎧 <b>Now Spinning — Kaelen Booth</b> (📀 {html.escape(next_track.source_label)})\n"
                 f"• Lagu: {link_part} (<code>{next_track.duration}</code>)\n"
                 f"• Permintaan: {_mention(next_track.requester_id, next_track.requester_name)}",
                 thread_id=next_track.thread_id,
@@ -633,7 +557,7 @@ async def enqueue_song_request(
         requester_name=requester_name,
         thread_id=thread_id,
         db_req_id=db_req_id,
-        is_local_file=info.get("is_local_file", False),
+        source_label=info.get("source_label", "Music Vault"),
     )
     music_queue.append(track)
 
@@ -651,6 +575,7 @@ async def enqueue_song_request(
     return True
 
 
+# --- SINKRONISASI ANTREAN LAGU DARI MINI APP (WEBAPP) ---
 async def _poll_webapp_song_queue():
     await asyncio.sleep(3)
     while True:
@@ -674,6 +599,7 @@ async def _poll_webapp_song_queue():
                 rname = r["requester_name"] or "Tamu Lounge"
                 title = r["song_title"]
                 tid = r["thread_id"]
+                logger.info("Sinkron request lagu dari Mini App: %s (oleh %s)", title, rname)
                 await enqueue_song_request(
                     query=title,
                     uid=uid,
@@ -903,10 +829,10 @@ async def main():
     _assistant_user_id = me.id
     await call_py.start()
     logger.info(
-        "Akun Asisten Kaelen (@%s / %s) & PyTgCalls aktif! Gudang Musik: %s",
+        "Akun Asisten Kaelen (@%s / %s) & PyTgCalls aktif! MUSIC_VAULT_ID: %s",
         me.username or me.first_name,
         me.id,
-        WAREHOUSE_CHANNEL_ID or "Belum diset",
+        MUSIC_VAULT_ID,
     )
 
     _spawn_task(_poll_webapp_song_queue())
