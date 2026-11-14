@@ -1,596 +1,978 @@
-import os
-import hmac
-import json
 import html
+import random
 import asyncio
-import hashlib
-from urllib.parse import parse_qsl
-from datetime import datetime
-from aiohttp import web
-from aiogram import Bot
-from aiogram.enums import ParseMode, ChatAction
+import logging
+from datetime import datetime, timedelta
+
+from aiogram import Bot, Dispatcher, F, types
+from aiogram.filters import Command
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    ReactionTypeEmoji,
+)
+from aiogram.enums import ParseMode
 
 import shared.database as db
 import shared.config as cfg
-from hans_concierge.helpers import log_wallet_tx, add_quest_progress
+from hans_concierge.webapp_server import start_webapp_server
 
-julian_bot = Bot(token=cfg.TOKEN_JULIAN)
-kaelen_bot = Bot(token=cfg.TOKEN_KAELEN) if getattr(cfg, "TOKEN_KAELEN", None) else julian_bot
-hans_bot = Bot(token=cfg.TOKEN_HANS)
+logging.basicConfig(level=logging.INFO)
 
-WEBAPP_HTML_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "webapp", "index.html")
+bot = Bot(token=cfg.TOKEN_JULIAN)
+dp = Dispatcher(storage=MemoryStorage())
 
-EMBEDDED_HTML = """<!DOCTYPE html>
-<html lang="id">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>The Velvet Hour — Menu, Mixology & Lounge</title>
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <style>
-    :root {
-      --bg: #100b0f;
-      --card: #1b1319;
-      --gold: #dfb866;
-      --gold-dim: rgba(223, 184, 102, 0.28);
-      --cream: #f5efe6;
-      --muted: #a69c95;
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-    body { background: #100b0f; color: #f5efe6; padding-bottom: 90px; min-height: 100vh; }
+OWNER_ID = cfg.OWNER_ID
+GROUP_ID = cfg.GROUP_ID
+MINIAPP_MENU_URL = "https://t.me/JulianVanceVH_bot/menu"
 
-    header {
-      background: linear-gradient(180deg, #2b121b 0%, #100b0f 100%);
-      padding: 16px 16px 10px;
-      border-bottom: 1px solid var(--gold-dim);
-      position: sticky; top: 0; z-index: 10;
-    }
-    .brand { font-size: 10px; letter-spacing: 2px; color: var(--gold); font-weight: 700; }
-    .title-row { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
-    h1 { font-size: 19px; font-weight: 700; color: #f5efe6; }
-    .badge-vc {
-      background: rgba(223, 184, 102, 0.16);
-      border: 1px solid var(--gold);
-      color: var(--gold);
-      padding: 4px 10px;
-      border-radius: 20px;
-      font-size: 12px;
-      font-weight: 700;
-    }
+DRINKS_CATALOG = {
+    "espresso": ("Double Espresso", 0, False),
+    "latte": ("Caramel Latte", 0, False),
+    "negroni": ("Classic Negroni", 0, False),
+    "whisky": ("Smoked Whisky", 0, False),
+    "mojito": ("Velvet Mojito", 0, False),
+    "mocktail": ("Crimson Sunset Mocktail", 0, False),
+    "tea": ("Earl Grey Reserve Tea", 0, False),
+    "water": ("Sparkling Mineral Water", 0, False),
+    "vip_dom": ("Dom Pérignon Vintage", 15, True),
+    "vip_blue": ("Blue Label Reserve", 15, True),
+    "vip_absinthe": ("Emerald Absinthe", 15, True),
+    "vip_royal": ("Velvet Royal Martini", 15, True),
+}
 
-    .tabs {
-      display: flex; gap: 6px; padding: 10px 12px; overflow-x: auto;
-      background: #100b0f; position: sticky; top: 64px; z-index: 9;
-    }
-    .tabs::-webkit-scrollbar { display: none; }
-    .tab {
-      flex: 0 0 auto; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--gold-dim);
-      background: var(--card); color: var(--muted); font-size: 12px; font-weight: 600;
-      cursor: pointer;
-    }
-    .tab.active {
-      background: linear-gradient(135deg, #4b1725, #29141d);
-      border-color: var(--gold); color: var(--gold);
-    }
+FOODS_CATALOG = {
+    "fries": ("Truffle Parmesan Fries", 0, False),
+    "steak": ("Ribeye Steak", 0, False),
+    "pasta": ("Truffle Carbonara", 0, False),
+    "croissant": ("Butter Croissant", 0, False),
+    "platter": ("Charcuterie Board", 0, False),
+    "cake": ("Velvet Lava Cake", 0, False),
+    "tiramisu": ("Espresso Tiramisu", 0, False),
+    "vip_caviar": ("Beluga Caviar Blinis", 15, True),
+    "vip_lobster": ("Butter Poached Lobster", 15, True),
+    "vip_a5": ("Miyazaki Wagyu A5", 15, True),
+    "vip_gold": ("24K Gold Dark Truffle", 15, True),
+}
 
-    .section { display: none; padding: 4px 16px; }
-    .section.active { display: block; }
-    .sub-title {
-      font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px;
-      color: var(--gold); margin: 14px 0 8px; font-weight: 700;
-    }
+SHIFT_ROLES = {
+    "waiter": {"title": "Waiter / Server", "quota": 4, "cmds": "/welcome @user & /dish Nama Makanan"},
+    "bartender": {"title": "Bartender", "quota": 2, "cmds": "/mix Nama Minuman & /sober @user"},
+    "host": {"title": "Lounge Host", "quota": 2, "cmds": "/ambience & /toastall"},
+}
 
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    .item-card {
-      background: var(--card); border: 1px solid var(--gold-dim);
-      border-radius: 14px; padding: 12px; display: flex; flex-direction: column;
-      justify-content: space-between;
-    }
-    .item-card.vip { border-color: rgba(223, 184, 102, 0.65); background: linear-gradient(160deg, #241914, #181116); }
-    .item-emoji { font-size: 24px; margin-bottom: 6px; }
-    .item-name { font-size: 13px; font-weight: 700; margin-bottom: 3px; color: #f5efe6; }
-    .item-desc { font-size: 11px; color: var(--muted); line-height: 1.35; margin-bottom: 10px; }
-    .item-footer { display: flex; justify-content: space-between; align-items: center; }
-    .price { font-size: 11px; font-weight: 700; color: var(--gold); }
-
-    .btn-order {
-      background: var(--gold); color: #140f0b; border: none; border-radius: 8px;
-      padding: 6px 11px; font-size: 11px; font-weight: 700; cursor: pointer;
-    }
-
-    .box-panel {
-      background: var(--card); border: 1px solid var(--gold-dim);
-      border-radius: 14px; padding: 14px; margin-top: 10px;
-    }
-    label { display: block; font-size: 12px; color: var(--gold); font-weight: 600; margin: 10px 0 6px; }
-    select, .input-field {
-      width: 100%; background: #100b0f; border: 1px solid var(--gold-dim);
-      color: #f5efe6; padding: 11px; border-radius: 10px; font-size: 13px;
-      outline: none;
-    }
-    .btn-full {
-      width: 100%; background: linear-gradient(135deg, #dfb866, #b88c38);
-      color: #140f0b; border: none; padding: 12px; border-radius: 10px;
-      font-size: 13px; font-weight: 800; cursor: pointer; margin-top: 14px;
-    }
-
-    .toast {
-      position: fixed; bottom: 20px; left: 16px; right: 16px;
-      background: #23181e; border: 1px solid var(--gold); color: #f5efe6;
-      padding: 12px 14px; border-radius: 12px; font-size: 13px; text-align: center;
-      display: none; z-index: 99; box-shadow: 0 8px 24px rgba(0,0,0,0.6);
-    }
-  </style>
-</head>
-<body>
-  <header>
-    <div class="brand">THE VELVET HOUR  •  LOUNGE CONCIERGE</div>
-    <div class="title-row">
-      <h1 id="guest-name">Selamat Malam</h1>
-      <div class="badge-vc" id="guest-balance">50 VC</div>
-    </div>
-  </header>
-
-  <div class="tabs">
-    <div class="tab active" onclick="switchTab('drinks', this)">🍸 Minuman</div>
-    <div class="tab" onclick="switchTab('mixology', this)">🧪 Racik Koktail</div>
-    <div class="tab" onclick="switchTab('food', this)">🍽️ Hidangan</div>
-    <div class="tab" onclick="switchTab('lapak', this)">🏪 Lapak</div>
-    <div class="tab" onclick="switchTab('music', this)">🎶 Jukebox</div>
-  </div>
-
-  <div id="tab-drinks" class="section active">
-    <div class="sub-title">Signature & Classic Drinks (Gratis)</div>
-    <div class="grid" id="grid-drinks-reg"></div>
-    <div class="sub-title">✨ VIP Reserve Cellar (Gratis VIP / 15 VC)</div>
-    <div class="grid" id="grid-drinks-vip"></div>
-  </div>
-
-  <div id="tab-mixology" class="section">
-    <div class="box-panel">
-      <div style="font-size: 15px; font-weight: 700; color: var(--gold);">🧪 Custom Mixology Bar</div>
-      <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">
-        Pilih bahan racikanmu sendiri—Julian akan mengocoknya langsung di meja bar grup (Biaya: <b>10 VC</b>, Gratis VIP).
-      </div>
-
-      <label>1. Dasar Minuman (Base)</label>
-      <select id="mix-base">
-        <option value="Aged Bourbon Whisky">🥃 Aged Bourbon Whisky</option>
-        <option value="Botanical London Gin">🍸 Botanical London Gin</option>
-        <option value="Silver Agave Tequila">🌵 Silver Agave Tequila</option>
-        <option value="Dark Spiced Rum">🏴‍☠️ Dark Spiced Rum</option>
-        <option value="Sparkling Non-Alcoholic Tonic">🫧 Sparkling Tonic (Non-Alkohol)</option>
-      </select>
-
-      <label>2. Campuran Rasa (Mixer & Syrup)</label>
-      <select id="mix-syrup">
-        <option value="Blood Orange & Bitters">🍊 Blood Orange & Aromatic Bitters</option>
-        <option value="Velvet Rose & Lychee">🌹 Velvet Rose & Lychee Nectar</option>
-        <option value="Smoked Honey & Espresso">☕ Smoked Honey & Cold Espresso</option>
-        <option value="Crushed Mint & Yuzu Lime">🌿 Crushed Mint & Yuzu Lime</option>
-      </select>
-
-      <label>3. Hiasan Gelas (Garnish)</label>
-      <select id="mix-garnish">
-        <option value="Kulit Jeruk Bakar">🔥 Kulit Jeruk Bakar (Torched Peel)</option>
-        <option value="Batang Kayu Manis Asap">🪵 Batang Kayu Manis Asap</option>
-        <option value="Kelopak Mawar Merah">🥀 Kelopak Mawar Merah</option>
-        <option value="Ceri Hitam Maraschino">🍒 Ceri Hitam Maraschino</option>
-      </select>
-
-      <label>4. Beri Nama Koktailmu (Opsional)</label>
-      <input type="text" id="mix-name" class="input-field" placeholder="Contoh: Midnight Crimson" maxlength="32" />
-
-      <button class="btn-full" onclick="submitCustomMix()">🍸 Minta Julian Racik Sekarang</button>
-    </div>
-  </div>
-
-  <div id="tab-food" class="section">
-    <div class="sub-title">Midnight Kitchen (Gratis)</div>
-    <div class="grid" id="grid-food-reg"></div>
-    <div class="sub-title">✨ Chef's VIP Gastronomy (Gratis VIP / 15 VC)</div>
-    <div class="grid" id="grid-food-vip"></div>
-  </div>
-
-  <div id="tab-lapak" class="section">
-    <div class="sub-title">🏪 Etalase Item Lapak Partner Aktif</div>
-    <div class="grid" id="grid-lapak">
-      <div style="color: var(--muted); font-size: 12px;">Memuat katalog lapak...</div>
-    </div>
-  </div>
-
-  <div id="tab-music" class="section">
-    <div class="box-panel">
-      <div style="font-size: 15px; font-weight: 700; color: var(--gold);">🎧 Request Lagu ke Kaelen DJ</div>
-      <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">
-        Lagu langsung masuk antrean & diumumkan Kaelen di grup (Biaya: <b>10 VC</b>, Gratis VIP).
-      </div>
-      <input type="text" id="song-input" class="input-field" style="margin-top: 12px;" placeholder="Contoh: Apocalypse - Cigarettes After Sex" />
-      <button class="btn-full" onclick="submitSong()">🎶 Putar di Ruang Utama</button>
-    </div>
-  </div>
-
-  <div id="toast" class="toast"></div>
-
-  <script>
-    const tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
-    if (tg) {
-      tg.ready();
-      tg.expand();
-    }
-
-    const MENUS = {
-      drinksReg: [
-        { code: "negroni", emoji: "🥃", name: "Classic Negroni", desc: "Gin, Campari & sweet vermouth.", price: 0 },
-        { code: "whisky", emoji: "🧊", name: "Smoked Whisky", desc: "Bourbon dengan es batu kristal.", price: 0 },
-        { code: "mojito", emoji: "🌿", name: "Velvet Mojito", desc: "Daun mint, lime & soda dingin.", price: 0 },
-        { code: "espresso", emoji: "☕", name: "Double Espresso", desc: "Kopi panggang gelap pekat.", price: 0 },
-        { code: "latte", emoji: "🥛", name: "Caramel Latte", desc: "Espresso lembut & karamel.", price: 0 },
-        { code: "mocktail", emoji: "🍹", name: "Crimson Sunset", desc: "Delima, cranberry & tonic segar.", price: 0 },
-      ],
-      drinksVip: [
-        { code: "vip_dom", emoji: "🍾", name: "Dom Pérignon Vintage", desc: "Sampanye Prancis eksklusif.", price: 15, vip: true },
-        { code: "vip_blue", emoji: "💎", name: "Blue Label Reserve", desc: "Scotch langka aroma kayu ek.", price: 15, vip: true },
-        { code: "vip_absinthe", emoji: "🧪", name: "Emerald Absinthe", desc: "Gula karamel terbakar.", price: 15, vip: true },
-        { code: "vip_royal", emoji: "👑", name: "Velvet Royal Martini", desc: "Vodka dengan edible gold leaf.", price: 15, vip: true },
-      ],
-      foodReg: [
-        { code: "steak", emoji: "🥩", name: "Ribeye Steak", desc: "Medium-rare saus lada hitam.", price: 0 },
-        { code: "pasta", emoji: "🍝", name: "Truffle Carbonara", desc: "Spaghetti jamur truffle & keju.", price: 0 },
-        { code: "fries", emoji: "🍟", name: "Truffle Fries", desc: "Kentang renyah tabur parmesan.", price: 0 },
-        { code: "platter", emoji: "🧀", name: "Charcuterie Board", desc: "Keju artisan, buah & crackers.", price: 0 },
-        { code: "tiramisu", emoji: "🍰", name: "Espresso Tiramisu", desc: "Krim mascarpone klasik Italia.", price: 0 },
-        { code: "croissant", emoji: "🥐", name: "Butter Croissant", desc: "Pastry hangat mentega Prancis.", price: 0 },
-      ],
-      foodVip: [
-        { code: "vip_a5", emoji: "🥩", name: "Miyazaki Wagyu A5", desc: "Wagyu Jepang lumer di mulut.", price: 15, vip: true },
-        { code: "vip_caviar", emoji: "🥄", name: "Beluga Caviar", desc: "Kaviar hitam & krim asam.", price: 15, vip: true },
-        { code: "vip_lobster", emoji: "🦞", name: "Poached Lobster", desc: "Lobster panggang mentega.", price: 15, vip: true },
-        { code: "vip_gold", emoji: "🍫", name: "24K Gold Truffle", desc: "Ganache hitam lapis emas.", price: 15, vip: true },
-      ]
-    };
-
-    let isVipUser = false;
-
-    function showToast(msg) {
-      const t = document.getElementById("toast");
-      t.innerText = msg;
-      t.style.display = "block";
-      setTimeout(() => { t.style.display = "none"; }, 3500);
-    }
-
-    function renderGrid(list, containerId, category) {
-      const box = document.getElementById(containerId);
-      box.innerHTML = list.map(item => {
-        const priceLabel = item.price === 0 ? "Gratis" : (isVipUser ? "Gratis (VIP)" : `${item.price} VC`);
-        return `
-          <div class="item-card ${item.vip ? 'vip' : ''}">
-            <div>
-              <div class="item-emoji">${item.emoji}</div>
-              <div class="item-name">${item.name}</div>
-              <div class="item-desc">${item.desc}</div>
-            </div>
-            <div class="item-footer">
-              <span class="price">${priceLabel}</span>
-              <button class="btn-order" onclick="placeOrder('${category}', '${item.code}', '${item.name}', ${item.price})">Pesan</button>
-            </div>
-          </div>
-        `;
-      }).join("");
-    }
-
-    function renderAllMenus() {
-      renderGrid(MENUS.drinksReg, "grid-drinks-reg", "drink");
-      renderGrid(MENUS.drinksVip, "grid-drinks-vip", "drink");
-      renderGrid(MENUS.foodReg, "grid-food-reg", "food");
-      renderGrid(MENUS.foodVip, "grid-food-vip", "food");
-    }
-
-    function switchTab(tabName, el) {
-      document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
-      document.querySelectorAll(".section").forEach(s => s.classList.remove("active"));
-      el.classList.add("active");
-      document.getElementById("tab-" + tabName).classList.add("active");
-    }
-
-    async function loadUserProfile() {
-      if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
-        document.getElementById("guest-name").innerText = tg.initDataUnsafe.user.first_name;
-      }
-      try {
-        const res = await fetch("/api/me", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ initData: tg ? tg.initData : "" })
-        });
-        const data = await res.json();
-        if (data.ok) {
-          isVipUser = data.is_vip;
-          document.getElementById("guest-balance").innerText = `${data.coins} VC ${data.is_vip ? '• VIP' : ''}`;
-          renderAllMenus();
-          renderLapak(data.shop_items || []);
-        }
-      } catch (e) {
-        renderAllMenus();
-      }
-    }
-
-    function renderLapak(items) {
-      const box = document.getElementById("grid-lapak");
-      if (!items.length) {
-        box.innerHTML = `<div style="color: var(--muted); font-size: 12px; grid-column: 1 / -1;">Belum ada item dijual di lapak partner saat ini.</div>`;
-        return;
-      }
-      box.innerHTML = items.map(it => `
-        <div class="item-card">
-          <div>
-            <div class="item-emoji">🛍️</div>
-            <div class="item-name">${it.title}</div>
-            <div class="item-desc">Toko: ${it.shop_name}</div>
-          </div>
-          <div class="item-footer">
-            <span class="price">${it.price_vc} VC</span>
-            <button class="btn-order" onclick="buyLapakItem(${it.id}, '${it.title.replace(/'/g, "\\'")}', ${it.price_vc})">Beli</button>
-          </div>
-        </div>
-      `).join("");
-    }
-
-    async function buyLapakItem(itemId, title, price) {
-      if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("medium");
-      showToast(`Membeli ${title}...`);
-      const res = await fetch("/api/order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ initData: tg ? tg.initData : "", category: "lapak", item_id: itemId, item_name: title, price: price })
-      });
-      const data = await res.json();
-      if (data.ok) {
-        showToast("✅ Berhasil dibeli! Cek nota pembelian di PC Hans.");
-        if (tg) setTimeout(() => tg.close(), 1000);
-      } else {
-        showToast("⚠️ " + (data.error || "Gagal membeli item."));
-      }
-    }
-
-    async function placeOrder(category, code, itemName, price) {
-      if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("medium");
-      showToast(`Julian sedang meracik ${itemName}...`);
-      const res = await fetch("/api/order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ initData: tg ? tg.initData : "", category, code, item_name: itemName, price })
-      });
-      const data = await res.json();
-      if (data.ok) {
-        document.getElementById("guest-balance").innerText = `${data.new_coins} VC ${isVipUser ? '• VIP' : ''}`;
-        showToast("✅ Pesanan dikirim ke meja bar grup!");
-        if (tg) setTimeout(() => tg.close(), 800);
-      } else {
-        showToast("⚠️ " + (data.error || "Gagal memesan."));
-      }
-    }
-
-    async function submitCustomMix() {
-      const base = document.getElementById("mix-base").value;
-      const syrup = document.getElementById("mix-syrup").value;
-      const garnish = document.getElementById("mix-garnish").value;
-      const customName = document.getElementById("mix-name").value.trim() || "Velvet Custom Signature";
-      const fullLabel = `${customName} (${base} + ${syrup}, garnish ${garnish})`;
-      await placeOrder("custom_mix", "mix", fullLabel, 10);
-    }
-
-    async function submitSong() {
-      const song = document.getElementById("song-input").value.trim();
-      if (song.length < 3) return showToast("⚠️ Ketik judul lagu terlebih dahulu.");
-      await placeOrder("song", "reqsong", song, 10);
-    }
-
-    renderAllMenus();
-    loadUserProfile();
-  </script>
-</body>
-</html>"""
+_last_chat_earn: dict[int, datetime] = {}
 
 
-def _verify_telegram_init_data(init_data: str, bot_token: str) -> dict | None:
+def styled_btn(
+    text: str,
+    callback_data: str | None = None,
+    url: str | None = None,
+    style: str | None = None,
+    icon_emoji_id: str | None = None,
+) -> InlineKeyboardButton:
+    data = {"text": text}
+    if callback_data:
+        data["callback_data"] = callback_data
+    if url:
+        data["url"] = url
+    if style:
+        data["style"] = style
+    if icon_emoji_id:
+        data["icon_custom_emoji_id"] = icon_emoji_id
+    return InlineKeyboardButton.model_construct(**data)
+
+
+async def react_msg(chat_id: int, message_id: int, emoji: str = "🥂"):
     try:
-        parsed = dict(parse_qsl(init_data, keep_blank_values=True))
-        received_hash = parsed.pop("hash", None)
-        if not received_hash:
-            return None
-        data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
-        secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
-        calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(calculated_hash, received_hash):
-            return None
-        return json.loads(parsed.get("user", "{}"))
-    except Exception:
-        return None
-
-
-def _authenticate_user(init_data: str) -> dict | None:
-    for tok in [getattr(cfg, "TOKEN_JULIAN", ""), getattr(cfg, "TOKEN_HANS", "")]:
-        if tok:
-            u = _verify_telegram_init_data(init_data, tok)
-            if u and u.get("id"):
-                return u
-    return None
-
-
-async def _serve_with_bartender_animation(category: str, mention: str, item_name: str, is_vip: bool):
-    vip_tag = " 👑 <i>(VIP Reserve)</i>" if is_vip else ""
-    try:
-        await julian_bot.send_chat_action(cfg.GROUP_ID, ChatAction.TYPING)
+        await bot.set_message_reaction(
+            chat_id=chat_id,
+            message_id=message_id,
+            reaction=[ReactionTypeEmoji(emoji=emoji)],
+        )
     except Exception:
         pass
 
-    if category in ("drink", "custom_mix"):
-        msg = await julian_bot.send_message(
-            cfg.GROUP_ID,
-            f"🧊 <i>Julian mengambil gelas kristal dingin dan menyiapkan bahan untuk {mention}...</i>",
-            parse_mode=ParseMode.HTML,
-        )
-        await asyncio.sleep(1.3)
-        await msg.edit_text(
-            "🍸 <i>Julian mengocok shaker dengan ritme presisi lalu menuangkannya perlahan...</i>",
-            parse_mode=ParseMode.HTML,
-        )
-        await asyncio.sleep(1.3)
-        header = "🧪 <b>CUSTOM MIXOLOGY — JULIAN</b>" if category == "custom_mix" else "🍸 <b>JULIAN — BARTENDER SERVICE</b>"
-        await msg.edit_text(
-            f"{header}\n\n"
-            f"<i>Julian menggeser gelas di atas meja bar mahoni menuju {mention}{vip_tag}.</i>\n"
-            f"• <b>Pesanan:</b> <b>{item_name}</b>\n"
-            f"<i>\"Silakan dinikmati malam ini.\"</i>",
-            parse_mode=ParseMode.HTML,
-        )
-    elif category == "food":
-        msg = await julian_bot.send_message(
-            cfg.GROUP_ID,
-            f"🔥 <i>Pesanan dapur untuk {mention} sedang diproses oleh chef...</i>",
-            parse_mode=ParseMode.HTML,
-        )
-        await asyncio.sleep(1.8)
-        await msg.edit_text(
-            f"🍽️ <b>JULIAN — MIDNIGHT KITCHEN</b>\n\n"
-            f"<i>Hidangan hangat baru saja keluar dari dapur dan disajikan ke meja {mention}{vip_tag}.</i>\n"
-            f"• <b>Hidangan:</b> <b>{item_name}</b>",
-            parse_mode=ParseMode.HTML,
-        )
 
-
-async def handle_index(request: web.Request) -> web.Response:
-    if os.path.exists(WEBAPP_HTML_PATH):
-        with open(WEBAPP_HTML_PATH, "r", encoding="utf-8") as f:
-            return web.Response(text=f.read(), content_type="text/html")
-    return web.Response(text=EMBEDDED_HTML, content_type="text/html")
-
-
-async def handle_api_me(request: web.Request) -> web.Response:
-    body = await request.json()
-    tg_user = _authenticate_user(body.get("initData", ""))
-    if not tg_user:
-        return web.json_response({"ok": False, "error": "Sesi tidak valid"}, status=401)
-
-    uid = int(tg_user["id"])
+async def ensure_julian_schema():
     async with db.pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT coins, is_vip, vip_until FROM users WHERE user_id = $1", uid)
-        items = await conn.fetch("""
-            SELECT si.id, si.title, si.price_vc, ps.shop_name
-            FROM shop_items si
-            JOIN partner_shops ps ON si.shop_id = ps.id
-            WHERE si.is_sold = FALSE
-            ORDER BY si.id DESC LIMIT 20
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                username TEXT,
+                full_name TEXT,
+                coins INTEGER DEFAULT 50,
+                charm_points INTEGER DEFAULT 0,
+                is_vip BOOLEAN DEFAULT FALSE,
+                vip_until TIMESTAMP WITHOUT TIME ZONE,
+                vip_booth_name TEXT,
+                is_admin BOOLEAN DEFAULT FALSE
+            );
+        """)
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS charm_points INTEGER DEFAULT 0;")
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS vip_booth_name TEXT;")
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS active_shifts (
+                user_id BIGINT PRIMARY KEY,
+                role_name TEXT NOT NULL,
+                started_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+                ends_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+                service_count INTEGER DEFAULT 0
+            );
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS shift_daily_counts (
+                user_id BIGINT NOT NULL,
+                shift_date DATE NOT NULL,
+                count INTEGER DEFAULT 0,
+                PRIMARY KEY (user_id, shift_date)
+            );
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS duel_challenges (
+                id SERIAL PRIMARY KEY,
+                challenger_id BIGINT NOT NULL,
+                target_id BIGINT NOT NULL,
+                bet_vc INTEGER NOT NULL,
+                created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()
+            );
         """)
 
-    coins = row["coins"] if row else 0
-    is_vip = bool(row and row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
-    shop_list = [
-        {"id": r["id"], "title": r["title"], "price_vc": r["price_vc"], "shop_name": r["shop_name"]}
-        for r in items
-    ]
-    return web.json_response({"ok": True, "coins": coins, "is_vip": is_vip, "shop_items": shop_list})
+
+async def _sync_tg_user(conn, tg_user: types.User):
+    if not tg_user or tg_user.is_bot:
+        return
+    await conn.execute("""
+        INSERT INTO users (user_id, username, full_name, coins, charm_points)
+        VALUES ($1, $2, $3, 50, 0)
+        ON CONFLICT (user_id) DO UPDATE SET
+            username = COALESCE(EXCLUDED.username, users.username),
+            full_name = EXCLUDED.full_name;
+    """, tg_user.id, tg_user.username, tg_user.full_name)
 
 
-async def handle_api_order(request: web.Request) -> web.Response:
-    body = await request.json()
-    tg_user = _authenticate_user(body.get("initData", ""))
-    if not tg_user:
-        return web.json_response({"ok": False, "error": "Sesi Telegram tidak valid"}, status=401)
+async def _resolve_target_smart(conn, message: types.Message, ident: str | None = None):
+    if message.reply_to_message and message.reply_to_message.from_user and not message.reply_to_message.from_user.is_bot:
+        ru = message.reply_to_message.from_user
+        await _sync_tg_user(conn, ru)
+        return await conn.fetchrow("SELECT user_id, username, full_name, coins, charm_points FROM users WHERE user_id = $1", ru.id)
 
-    uid = int(tg_user["id"])
-    first_name = html.escape(tg_user.get("first_name", "Tamu"))
-    mention = f'<a href="tg://user?id={uid}">{first_name}</a>'
-    category = body.get("category", "drink")
+    if message.entities:
+        for ent in message.entities:
+            if ent.type == "text_mention" and ent.user and not ent.user.is_bot:
+                await _sync_tg_user(conn, ent.user)
+                return await conn.fetchrow("SELECT user_id, username, full_name, coins, charm_points FROM users WHERE user_id = $1", ent.user.id)
 
-    if category == "lapak":
-        item_id = int(body.get("item_id", 0))
-        async with db.pool.acquire() as conn:
-            async with conn.transaction():
-                item = await conn.fetchrow("""
-                    SELECT si.*, ps.owner_id, ps.shop_name
-                    FROM shop_items si
-                    JOIN partner_shops ps ON si.shop_id = ps.id
-                    WHERE si.id = $1 FOR UPDATE
-                """, item_id)
-                if not item or item["is_sold"]:
-                    return web.json_response({"ok": False, "error": "Item sudah terjual atau tidak tersedia."})
-                if item["owner_id"] == uid:
-                    return web.json_response({"ok": False, "error": "Tidak bisa membeli item lapak sendiri."})
+    if not ident:
+        return None
 
-                buyer = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", uid)
-                price = item["price_vc"]
-                if not buyer or (buyer["coins"] or 0) < price:
-                    return web.json_response({"ok": False, "error": f"Saldo kurang! Butuh {price} VC."})
+    clean = ident.strip().lstrip("@")
+    if clean.isdigit():
+        return await conn.fetchrow("SELECT user_id, username, full_name, coins, charm_points FROM users WHERE user_id = $1", int(clean))
+    return await conn.fetchrow("SELECT user_id, username, full_name, coins, charm_points FROM users WHERE LOWER(username) = $1", clean.lower())
 
-                new_coins = buyer["coins"] - price
-                await conn.execute("UPDATE users SET coins = $1 WHERE user_id = $2", new_coins, uid)
-                await conn.execute("UPDATE users SET coins = coins + $1 WHERE user_id = $2", price, item["owner_id"])
-                await conn.execute("UPDATE shop_items SET is_sold = TRUE, buyer_id = $1 WHERE id = $2", uid, item_id)
-                await log_wallet_tx(conn, uid, -price, f"Beli di {item['shop_name']}: {item['title']}")
-                await log_wallet_tx(conn, item["owner_id"], price, f"Penjualan {item['title']}")
 
-        try:
-            await hans_bot.send_message(
-                uid,
-                f"🧾 <b>NOTA PEMBELIAN LAPAK — {html.escape(item['shop_name'])}</b>\n\n"
-                f"• <b>Item:</b> {html.escape(item['title'])}\n"
-                f"• <b>Harga:</b> {price} VC\n"
-                f"• <b>Konten / Catatan:</b>\n<blockquote>{html.escape(item['content_text'] or '-')}</blockquote>",
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception:
-            pass
-        return web.json_response({"ok": True, "new_coins": new_coins})
+async def _log_tx(conn, user_id: int, amount: int, reason: str):
+    await conn.execute(
+        "INSERT INTO wallet_transactions (user_id, amount, reason, created_at) VALUES ($1, $2, $3, NOW())",
+        user_id, amount, reason
+    )
 
-    item_name = html.escape(str(body.get("item_name", "Menu"))[:100])
-    base_price = int(body.get("price", 0))
+
+async def _add_bar_quest(conn, user_id: int):
+    today = datetime.utcnow().date()
+    await conn.execute("""
+        INSERT INTO daily_quests (user_id, quest_date, quest_key, progress, claimed)
+        VALUES ($1, $2, 'bar_social', 1, FALSE)
+        ON CONFLICT (user_id, quest_date, quest_key) DO UPDATE
+        SET progress = LEAST(daily_quests.progress + 1, 1);
+    """, user_id, today)
+
+
+def _mention(uid: int, name: str) -> str:
+    return f'<a href="tg://user?id={uid}">{html.escape(name)}</a>'
+
+
+def miniapp_menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [styled_btn("🍸 Buka Buku Menu & Jukebox", url=MINIAPP_MENU_URL, style="primary")]
+    ])
+
+
+# --- BUKA MINI APP MENU & JUKEBOX (/menu, /order, /eat) ---
+@dp.message(Command("menu"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_menu_miniapp(message: types.Message):
+    async with db.pool.acquire() as conn:
+        await _sync_tg_user(conn, message.from_user)
+    await react_msg(message.chat.id, message.message_id, "🥂")
+    await message.reply(
+        "🥂 <i>Julian meletakkan tablet menu beludru di atas meja bar.</i>\n"
+        "Pilih minuman, racik koktail sendiri, hidangan dapur, atau request lagu jukebox melalui tombol di bawah:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=miniapp_menu_kb(),
+    )
+
+
+@dp.message(Command("order"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_order_drink(message: types.Message):
+    user = message.from_user
+    async with db.pool.acquire() as conn:
+        await _sync_tg_user(conn, user)
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await react_msg(message.chat.id, message.message_id, "🍸")
+        return await message.reply(
+            "🍸 <i>Julian menyodorkan kartu menu digital ke hadapanmu.</i>\n"
+            "Silakan pilih minuman atau racik koktail sendiri lewat Mini App di bawah ini:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=miniapp_menu_kb(),
+        )
+
+    raw_arg = parts[1].strip()
+    key = raw_arg.lower()
+
+    if key in DRINKS_CATALOG:
+        item_name, base_price, is_vip_item = DRINKS_CATALOG[key]
+    else:
+        item_name, base_price, is_vip_item = html.escape(raw_arg[:60]), 0, False
 
     async with db.pool.acquire() as conn:
         async with conn.transaction():
-            row = await conn.fetchrow("SELECT coins, is_vip, vip_until FROM users WHERE user_id = $1 FOR UPDATE", uid)
-            if not row:
-                return web.json_response({"ok": False, "error": "Silakan /start bot Hans terlebih dahulu."})
+            row = await conn.fetchrow("SELECT coins, is_vip, vip_until FROM users WHERE user_id = $1 FOR UPDATE", user.id)
+            is_vip = bool(row and row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
+            cost = 0 if is_vip else base_price
+            coins = (row["coins"] or 0) if row else 0
 
-            is_vip = bool(row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
-            final_cost = 0 if is_vip else max(0, base_price)
-            coins = row["coins"] or 0
+            if coins < cost:
+                return await message.reply(
+                    f"💸 Saldo VC tidak cukup untuk memesan <b>{item_name}</b> (butuh <b>{cost} VC</b>, saldo kamu: <b>{coins} VC</b>).",
+                    parse_mode=ParseMode.HTML,
+                )
 
-            if coins < final_cost:
-                return web.json_response({
-                    "ok": False,
-                    "error": f"Saldo kurang! Butuh {final_cost} VC (saldo kamu: {coins} VC)."
-                })
+            if cost > 0:
+                await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", cost, user.id)
+                await _log_tx(conn, user.id, -cost, f"Pesan minuman: {item_name}")
+            await _add_bar_quest(conn, user.id)
 
-            new_coins = coins - final_cost
-            if final_cost > 0:
-                await conn.execute("UPDATE users SET coins = $1 WHERE user_id = $2", new_coins, uid)
-                await log_wallet_tx(conn, uid, -final_cost, f"Pesanan Mini App: {item_name}")
+    await react_msg(message.chat.id, message.message_id, "🍸")
+    try:
+        await bot.send_chat_action(message.chat.id, "typing")
+    except Exception:
+        pass
 
-    if category in ("drink", "custom_mix", "food"):
-        await add_quest_progress(uid, "bar_social", 1)
-        asyncio.create_task(_serve_with_bartender_animation(category, mention, item_name, is_vip))
-    elif category == "song":
-        await add_quest_progress(uid, "music_vibe", 1)
-        rp_text = (
-            f"🎶 <b>KAELEN — JUKEBOX REQUEST</b>\n\n"
-            f"<i>Kaelen menyesuaikan piringan hitam di booth DJ atas permintaan {mention}.</i>\n"
-            f"• <b>Lagu Dipilih:</b> <b>{item_name}</b>"
+    vip_note = " 👑 <i>(VIP Reserve)</i>" if is_vip_item else ""
+    step_msg = await message.reply(
+        f"🧊 <i>Julian menyiapkan gelas kristal dingin untuk {_mention(user.id, user.first_name)}...</i>",
+        parse_mode=ParseMode.HTML,
+    )
+    await asyncio.sleep(1.2)
+    await step_msg.edit_text(
+        "🍸 <i>Julian mengocok shaker dengan presisi dan menuangkannya perlahan...</i>",
+        parse_mode=ParseMode.HTML,
+    )
+    await asyncio.sleep(1.2)
+    await step_msg.edit_text(
+        f"🍸 <b>JULIAN — BARTENDER SERVICE</b>\n\n"
+        f"<i>Julian menggeser gelas di atas meja bar mahoni menuju {_mention(user.id, user.first_name)}{vip_note}.</i>\n"
+        f"• <b>Pesanan:</b> <b>{item_name}</b>\n"
+        f"<i>\"Silakan dinikmati malam ini.\"</i>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.message(Command("eat"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_eat_food(message: types.Message):
+    user = message.from_user
+    async with db.pool.acquire() as conn:
+        await _sync_tg_user(conn, user)
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await react_msg(message.chat.id, message.message_id, "🍽️")
+        return await message.reply(
+            "🍽️ <i>Julian membukakan daftar hidangan dapur malam ini.</i>\n"
+            "Silakan pilih menu makanan langsung lewat Mini App di bawah ini:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=miniapp_menu_kb(),
         )
-        await kaelen_bot.send_message(cfg.GROUP_ID, rp_text, parse_mode=ParseMode.HTML)
 
-    return web.json_response({"ok": True, "new_coins": new_coins})
+    raw_arg = parts[1].strip()
+    key = raw_arg.lower()
+
+    if key in FOODS_CATALOG:
+        item_name, base_price, is_vip_item = FOODS_CATALOG[key]
+    else:
+        item_name, base_price, is_vip_item = html.escape(raw_arg[:60]), 0, False
+
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow("SELECT coins, is_vip, vip_until FROM users WHERE user_id = $1 FOR UPDATE", user.id)
+            is_vip = bool(row and row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
+            cost = 0 if is_vip else base_price
+            coins = (row["coins"] or 0) if row else 0
+
+            if coins < cost:
+                return await message.reply(
+                    f"💸 Saldo VC tidak cukup untuk memesan <b>{item_name}</b> (butuh <b>{cost} VC</b>).",
+                    parse_mode=ParseMode.HTML,
+                )
+
+            if cost > 0:
+                await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", cost, user.id)
+                await _log_tx(conn, user.id, -cost, f"Pesan makanan: {item_name}")
+            await _add_bar_quest(conn, user.id)
+
+    await react_msg(message.chat.id, message.message_id, "🍽️")
+    try:
+        await bot.send_chat_action(message.chat.id, "typing")
+    except Exception:
+        pass
+
+    vip_note = " 👑 <i>(VIP Gastronomy)</i>" if is_vip_item else ""
+    step_msg = await message.reply(
+        f"🔥 <i>Pesanan dapur untuk {_mention(user.id, user.first_name)} sedang disiapkan...</i>",
+        parse_mode=ParseMode.HTML,
+    )
+    await asyncio.sleep(1.5)
+    await step_msg.edit_text(
+        f"🍽️ <b>JULIAN — MIDNIGHT KITCHEN</b>\n\n"
+        f"<i>Hidangan hangat disajikan ke meja {_mention(user.id, user.first_name)}{vip_note}.</i>\n"
+        f"• <b>Hidangan:</b> <b>{item_name}</b>",
+        parse_mode=ParseMode.HTML,
+    )
 
 
-async def start_webapp_server():
-    app = web.Application()
-    app.router.add_get("/", handle_index)
-    app.router.add_post("/api/me", handle_api_me)
-    app.router.add_post("/api/order", handle_api_order)
+# --- TRAKTIR TAMU (/treat @user [menu] atau reply pesan target) ---
+@dp.message(Command("treat"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_treat_guest(message: types.Message):
+    sender = message.from_user
+    parts = (message.text or "").split(maxsplit=2)
+    has_reply = bool(message.reply_to_message and message.reply_to_message.from_user)
 
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 8080))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
+    if len(parts) < 2 and not has_reply:
+        return await message.reply(
+            "Format: <code>/treat @username [nama menu]</code> atau <b>reply</b> pesan temanmu dengan <code>/treat [nama menu]</code> (Biaya: 20 VC, +5 Charm).",
+            parse_mode=ParseMode.HTML,
+        )
+
+    target_ident = None if has_reply else parts[1]
+    if has_reply:
+        menu_text = html.escape((message.text or "").split(maxsplit=1)[1][:60]) if len(parts) >= 2 else "Signature Velvet Cocktail"
+    else:
+        menu_text = html.escape(parts[2].strip()[:60]) if len(parts) >= 3 else "Signature Velvet Cocktail"
+
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
+            await _sync_tg_user(conn, sender)
+            target = await _resolve_target_smart(conn, message, target_ident)
+            if not target:
+                return await message.reply(
+                    "⚠️ Tamu tujuan belum tercatat di database bar.\n"
+                    "<i>Tips: Reply langsung salah satu chat dia dengan</i> <code>/treat</code><i>, atau minta dia kirim 1 chat di grup ini terlebih dahulu.</i>",
+                    parse_mode=ParseMode.HTML,
+                )
+            if target["user_id"] == sender.id:
+                return await message.reply("Kamu tidak bisa mentraktir dirimu sendiri.")
+
+            s_row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", sender.id)
+            if not s_row or (s_row["coins"] or 0) < 20:
+                return await message.reply("💸 Saldo kamu kurang dari <b>20 VC</b> untuk mentraktir tamu.", parse_mode=ParseMode.HTML)
+
+            await conn.execute("UPDATE users SET coins = coins - 20 WHERE user_id = $1", sender.id)
+            await conn.execute("UPDATE users SET charm_points = COALESCE(charm_points, 0) + 5 WHERE user_id = $1", target["user_id"])
+            await _log_tx(conn, sender.id, -20, f"Traktir {target['full_name']} ({menu_text})")
+            await _add_bar_quest(conn, sender.id)
+
+    await react_msg(message.chat.id, message.message_id, "🥂")
+    await message.reply(
+        f"🥂 <b>COMPLIMENTARY TREAT</b>\n\n"
+        f"{_mention(sender.id, sender.first_name)} mengirimkan <b>{menu_text}</b> untuk {_mention(target['user_id'], target['full_name'])}!\n"
+        f"✨ <i>Pesona {_mention(target['user_id'], target['full_name'])} bertambah <b>+5 Charm</b>.</i>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+# --- RESERVASI VIP BOOTH (/booth) ---
+@dp.message(Command("booth"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_vip_booth(message: types.Message):
+    user = message.from_user
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        return await message.reply("Format: <code>/booth Nama Booth Eksklusif</code> (Khusus pemegang VIP Pass)", parse_mode=ParseMode.HTML)
+
+    booth_name = parts[1].strip()[:32]
+    async with db.pool.acquire() as conn:
+        await _sync_tg_user(conn, user)
+        row = await conn.fetchrow("SELECT is_vip, vip_until FROM users WHERE user_id = $1", user.id)
+        is_vip = bool(row and row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
+        if not is_vip:
+            return await message.reply("🔒 Reservasi Booth hanya tersedia untuk tamu dengan <b>VIP Reserve Pass</b>.", parse_mode=ParseMode.HTML)
+        await conn.execute("UPDATE users SET vip_booth_name = $1 WHERE user_id = $2", booth_name, user.id)
+
+    await react_msg(message.chat.id, message.message_id, "👑")
+    await message.reply(
+        f"🍾 <b>VIP BOOTH RESERVED</b>\n\n"
+        f"<i>Julian memasang papan nama emas di area balkon eksklusif untuk {_mention(user.id, user.first_name)}:</i>\n"
+        f"• <b>Nama Booth:</b> <b>{html.escape(booth_name)}</b>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+# --- MINI-GAME: MYSTERY BOX (/mystery) ---
+@dp.message(Command("mystery"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_mystery_box(message: types.Message):
+    user = message.from_user
+    cost = 40
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
+            await _sync_tg_user(conn, user)
+            row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", user.id)
+            if not row or (row["coins"] or 0) < cost:
+                return await message.reply("💸 Butuh <b>40 VC</b> untuk membuka Velvet Mystery Box.", parse_mode=ParseMode.HTML)
+
+            roll = random.randint(1, 100)
+            if roll <= 35:
+                prize_vc, prize_charm, label = 20, 2, "Gelang Beludru (+20 VC & +2 Charm)"
+            elif roll <= 70:
+                prize_vc, prize_charm, label = 45, 5, "Kunci Gudang Anggur (+45 VC & +5 Charm)"
+            elif roll <= 92:
+                prize_vc, prize_charm, label = 75, 10, "Koin Emas Antik (+75 VC & +10 Charm)"
+            else:
+                prize_vc, prize_charm, label = 150, 20, "JACKPOT! Mahkota Velvet (+150 VC & +20 Charm)"
+
+            net = prize_vc - cost
+            await conn.execute(
+                "UPDATE users SET coins = coins + $1, charm_points = COALESCE(charm_points, 0) + $2 WHERE user_id = $3",
+                net, prize_charm, user.id
+            )
+            await _log_tx(conn, user.id, net, f"Velvet Mystery Box ({label})")
+
+    await react_msg(message.chat.id, message.message_id, "🎁")
+    await message.reply(
+        f"🎁 <b>VELVET MYSTERY BOX</b>\n\n"
+        f"{_mention(user.id, user.first_name)} membuka kotak beludru hitam seharga <b>40 VC</b>...\n"
+        f"✨ <b>Isi Kotak:</b> <b>{label}</b>!",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+# --- NATIVE TELEGRAM SLOT MACHINE (/slot [taruhan 10-100]) ---
+@dp.message(Command("slot"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_slot_machine(message: types.Message):
+    parts = (message.text or "").split()
+    bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 15
+    if not (10 <= bet <= 100):
+        return await message.reply("Taruhan mesin slot harus antara <b>10 hingga 100 VC</b>. Contoh: <code>/slot 20</code>", parse_mode=ParseMode.HTML)
+
+    user = message.from_user
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
+            await _sync_tg_user(conn, user)
+            row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", user.id)
+            if not row or (row["coins"] or 0) < bet:
+                return await message.reply(f"💸 Saldo kamu kurang dari <b>{bet} VC</b> untuk memutar mesin slot.", parse_mode=ParseMode.HTML)
+            await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", bet, user.id)
+
+    dice_msg = await message.reply_dice(emoji="🎰")
+    val = dice_msg.dice.value
+    await asyncio.sleep(2.2)
+
+    if val == 64:
+        payout = bet * 5
+        outcome = f"🎉 <b>JACKPOT 777!</b> {_mention(user.id, user.first_name)} menang besar <b>+{payout} VC</b> (5x)!"
+    elif val in (1, 22, 43):
+        payout = bet * 3
+        outcome = f"✨ <b>TRIPLE MATCH!</b> {_mention(user.id, user.first_name)} memenangkan <b>+{payout} VC</b> (3x)!"
+    elif val in (2, 3, 4, 16, 17, 32, 48, 60, 61, 62, 63):
+        payout = int(bet * 1.5)
+        outcome = f"🥂 <b>DOUBLE PAIR!</b> {_mention(user.id, user.first_name)} mendapat <b>+{payout} VC</b>!"
+    else:
+        payout = 0
+        outcome = f"🥀 Belum beruntung kali ini, {_mention(user.id, user.first_name)} (<b>-{bet} VC</b>)."
+
+    async with db.pool.acquire() as conn:
+        if payout > 0:
+            await conn.execute("UPDATE users SET coins = coins + $1 WHERE user_id = $2", payout, user.id)
+            await _log_tx(conn, user.id, payout - bet, f"Menang Slot Machine (+{payout - bet} VC bersih)")
+        else:
+            await _log_tx(conn, user.id, -bet, "Taruhan Slot Machine")
+
+    await dice_msg.reply(f"🎰 <b>VELVET SLOT MACHINE</b>\n\n{outcome}", parse_mode=ParseMode.HTML)
+
+
+# --- NATIVE TELEGRAM DART DUEL (/dart @username [taruhan] atau reply pesan target) ---
+@dp.message(Command("dart"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_dart_challenge(message: types.Message):
+    parts = (message.text or "").split()
+    has_reply = bool(message.reply_to_message and message.reply_to_message.from_user)
+
+    if len(parts) < 2 and not has_reply:
+        return await message.reply("Format: <code>/dart @username [taruhan 10-100]</code> atau <b>reply</b> pesan lawanmu.", parse_mode=ParseMode.HTML)
+
+    if has_reply:
+        bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 20
+        target_ident = None
+    else:
+        bet = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 20
+        target_ident = parts[1]
+
+    if not (10 <= bet <= 100):
+        return await message.reply("Taruhan dart harus antara <b>10 hingga 100 VC</b>.", parse_mode=ParseMode.HTML)
+
+    challenger = message.from_user
+    async with db.pool.acquire() as conn:
+        await _sync_tg_user(conn, challenger)
+        target = await _resolve_target_smart(conn, message, target_ident)
+        if not target or target["user_id"] == challenger.id:
+            return await message.reply(
+                "⚠️ Lawan dart tidak ditemukan.\n"
+                "<i>Tips: Reply langsung pesan lawanmu dengan</i> <code>/dart 20</code> <i>agar otomatis terdeteksi!</i>",
+                parse_mode=ParseMode.HTML,
+            )
+
+        c_coins = await conn.fetchval("SELECT coins FROM users WHERE user_id = $1", challenger.id) or 0
+        t_coins = target["coins"] or 0
+        if c_coins < bet or t_coins < bet:
+            return await message.reply("Saldo salah satu pemain tidak mencukupi.")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        styled_btn(f"🎯 Lempar Dart ({bet} VC)", callback_data=f"playdart_{challenger.id}_{target['user_id']}_{bet}", style="success"),
+        styled_btn("❌ Tolak", callback_data=f"canceldart_{target['user_id']}", style="danger"),
+    ]])
+    await message.reply(
+        f"🎯 <b>TANTANGAN DART LOUNGE</b>\n\n"
+        f"{_mention(challenger.id, challenger.first_name)} menantang {_mention(target['user_id'], target['full_name'])}!\n"
+        f"• <b>Taruhan:</b> <b>{bet} VC</b> (Skor 6 = Bullseye 🎯)",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb,
+    )
+
+
+@dp.callback_query(F.data.startswith("playdart_"))
+async def cb_play_dart(call: types.CallbackQuery):
+    _, c_str, t_str, bet_str = call.data.split("_")
+    c_id, t_id, bet = int(c_str), int(t_str), int(bet_str)
+
+    if call.from_user.id != t_id:
+        return await call.answer("Hanya pemain yang ditantang yang bisa memulai lemparan!", show_alert=True)
+
+    await call.answer("Melempar anak panah...")
+    await call.message.edit_text("🎯 <b>Pertandingan Dart Dimulai!</b> Kedua pemain bersiap melempar ke papan target...", parse_mode=ParseMode.HTML)
+
+    d1_msg = await call.message.answer_dice(emoji="🎯")
+    await asyncio.sleep(1.5)
+    d2_msg = await call.message.answer_dice(emoji="🎯")
+    await asyncio.sleep(2.2)
+
+    s1, s2 = d1_msg.dice.value, d2_msg.dice.value
+
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
+            c_user = await conn.fetchrow("SELECT user_id, full_name, coins FROM users WHERE user_id = $1 FOR UPDATE", c_id)
+            t_user = await conn.fetchrow("SELECT user_id, full_name, coins FROM users WHERE user_id = $1 FOR UPDATE", t_id)
+
+            if (c_user["coins"] or 0) < bet or (t_user["coins"] or 0) < bet:
+                return await d2_msg.reply("⚠️ Pertandingan dibatalkan karena saldo salah satu pemain berubah.")
+
+            if s1 == s2:
+                return await d2_msg.reply(
+                    f"🎯 <b>SERI!</b> Kedua pemain mencetak skor <b>{s1}/6</b>. Taruhan <b>{bet} VC</b> dikembalikan utuh.",
+                    parse_mode=ParseMode.HTML,
+                )
+
+            winner = c_user if s1 > s2 else t_user
+            loser = t_user if s1 > s2 else c_user
+
+            await conn.execute("UPDATE users SET coins = coins + $1 WHERE user_id = $2", bet, winner["user_id"])
+            await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", bet, loser["user_id"])
+            await _log_tx(conn, winner["user_id"], bet, f"Menang Dart vs {loser['full_name']}")
+            await _log_tx(conn, loser["user_id"], -bet, f"Kalah Dart vs {winner['full_name']}")
+
+    bullseye_note = " 🔥 <b>BULLSEYE!</b>" if max(s1, s2) == 6 else ""
+    await d2_msg.reply(
+        f"🎯 <b>HASIL PERTANDINGAN DART</b>{bullseye_note}\n\n"
+        f"• {_mention(c_user['user_id'], c_user['full_name'])}: <b>{s1}/6</b>\n"
+        f"• {_mention(t_user['user_id'], t_user['full_name'])}: <b>{s2}/6</b>\n\n"
+        f"🏆 <b>Pemenang:</b> {_mention(winner['user_id'], winner['full_name'])} meraih <b>+{bet} VC</b>!",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.callback_query(F.data.startswith("canceldart_"))
+async def cb_cancel_dart(call: types.CallbackQuery):
+    t_id = int(call.data.replace("canceldart_", ""))
+    if call.from_user.id != t_id:
+        return await call.answer("Bukan tantangan untukmu!", show_alert=True)
+    await call.answer("Ditolak.")
+    await call.message.edit_text("❌ Tantangan dart ditolak.")
+
+
+# --- DUEL DADU NATIVE TELEGRAM (/dice @username [taruhan] atau reply pesan target) ---
+@dp.message(Command("dice"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_dice_duel(message: types.Message):
+    parts = (message.text or "").split()
+    has_reply = bool(message.reply_to_message and message.reply_to_message.from_user)
+
+    if len(parts) < 2 and not has_reply:
+        return await message.reply("Format: <code>/dice @username [taruhan 10-100]</code> atau <b>reply</b> pesan lawanmu.", parse_mode=ParseMode.HTML)
+
+    if has_reply:
+        bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 20
+        target_ident = None
+    else:
+        bet = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 20
+        target_ident = parts[1]
+
+    if not (10 <= bet <= 100):
+        return await message.reply("Taruhan duel dadu harus antara <b>10 hingga 100 VC</b>.", parse_mode=ParseMode.HTML)
+
+    challenger = message.from_user
+    async with db.pool.acquire() as conn:
+        await _sync_tg_user(conn, challenger)
+        target = await _resolve_target_smart(conn, message, target_ident)
+        if not target or target["user_id"] == challenger.id:
+            return await message.reply(
+                "⚠️ Lawan duel tidak ditemukan.\n"
+                "<i>Tips: Reply langsung pesan lawanmu dengan</i> <code>/dice 20</code> <i>agar otomatis terdeteksi!</i>",
+                parse_mode=ParseMode.HTML,
+            )
+
+        c_coins = await conn.fetchval("SELECT coins FROM users WHERE user_id = $1", challenger.id) or 0
+        t_coins = target["coins"] or 0
+        if c_coins < bet or t_coins < bet:
+            return await message.reply("Saldo VC salah satu pemain tidak mencukupi untuk taruhan tersebut.")
+
+        duel_id = await conn.fetchval("""
+            INSERT INTO duel_challenges (challenger_id, target_id, bet_vc)
+            VALUES ($1, $2, $3) RETURNING id
+        """, challenger.id, target["user_id"], bet)
+
+    await react_msg(message.chat.id, message.message_id, "🎲")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        styled_btn(f"🎲 Lempar Dadu ({bet} VC)", callback_data=f"accept_duel_{duel_id}", style="success"),
+        styled_btn("❌ Tolak", callback_data=f"decline_duel_{duel_id}", style="danger"),
+    ]])
+    await message.reply(
+        f"🎲 <b>TANTANGAN DUEL DADU MEJA BAR</b>\n\n"
+        f"{_mention(challenger.id, challenger.first_name)} menantang {_mention(target['user_id'], target['full_name'])}!\n"
+        f"• <b>Taruhan:</b> <b>{bet} VC</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb,
+    )
+
+
+@dp.callback_query(F.data.startswith("accept_duel_"))
+async def cb_accept_duel(call: types.CallbackQuery):
+    duel_id = int(call.data.replace("accept_duel_", ""))
+    async with db.pool.acquire() as conn:
+        duel = await conn.fetchrow("SELECT * FROM duel_challenges WHERE id = $1", duel_id)
+        if not duel:
+            return await call.answer("Tantangan duel sudah kedaluwarsa atau selesai.", show_alert=True)
+        if call.from_user.id != duel["target_id"]:
+            return await call.answer("Bukan tantangan untukmu!", show_alert=True)
+        await conn.execute("DELETE FROM duel_challenges WHERE id = $1", duel_id)
+
+    await call.answer("Melempar dadu...")
+    await call.message.edit_text("🎲 <b>Duel Dadu Dimulai!</b> Julian mengocok dua dadu kristal di atas meja...", parse_mode=ParseMode.HTML)
+
+    dice1 = await call.message.answer_dice(emoji="🎲")
+    await asyncio.sleep(1.4)
+    dice2 = await call.message.answer_dice(emoji="🎲")
+    await asyncio.sleep(2.2)
+
+    d1, d2 = dice1.dice.value, dice2.dice.value
+    bet = duel["bet_vc"]
+
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
+            c_user = await conn.fetchrow("SELECT user_id, full_name, coins FROM users WHERE user_id = $1 FOR UPDATE", duel["challenger_id"])
+            t_user = await conn.fetchrow("SELECT user_id, full_name, coins FROM users WHERE user_id = $1 FOR UPDATE", duel["target_id"])
+
+            if (c_user["coins"] or 0) < bet or (t_user["coins"] or 0) < bet:
+                return await dice2.reply("⚠️ Duel dibatalkan karena saldo salah satu pemain tidak mencukupi.")
+
+            if d1 == d2:
+                return await dice2.reply(
+                    f"🎲 <b>SERI!</b> Kedua pemain melempar angka <b>{d1}</b>. Taruhan <b>{bet} VC</b> dikembalikan utuh.",
+                    parse_mode=ParseMode.HTML,
+                )
+
+            winner = c_user if d1 > d2 else t_user
+            loser = t_user if d1 > d2 else c_user
+
+            await conn.execute("UPDATE users SET coins = coins + $1 WHERE user_id = $2", bet, winner["user_id"])
+            await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", bet, loser["user_id"])
+            await _log_tx(conn, winner["user_id"], bet, f"Menang Duel Dadu vs {loser['full_name']}")
+            await _log_tx(conn, loser["user_id"], -bet, f"Kalah Duel Dadu vs {winner['full_name']}")
+
+    await dice2.reply(
+        f"🎲 <b>HASIL DUEL DADU MEJA BAR</b>\n\n"
+        f"• {_mention(c_user['user_id'], c_user['full_name'])}: <b>{d1}</b>\n"
+        f"• {_mention(t_user['user_id'], t_user['full_name'])}: <b>{d2}</b>\n\n"
+        f"🏆 <b>Pemenang:</b> {_mention(winner['user_id'], winner['full_name'])} membawa pulang <b>+{bet} VC</b>!",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.callback_query(F.data.startswith("decline_duel_"))
+async def cb_decline_duel(call: types.CallbackQuery):
+    duel_id = int(call.data.replace("decline_duel_", ""))
+    async with db.pool.acquire() as conn:
+        duel = await conn.fetchrow("SELECT target_id FROM duel_challenges WHERE id = $1", duel_id)
+        if not duel:
+            return await call.answer("Sudah selesai.", show_alert=True)
+        if call.from_user.id != duel["target_id"]:
+            return await call.answer("Bukan tantangan untukmu!", show_alert=True)
+        await conn.execute("DELETE FROM duel_challenges WHERE id = $1", duel_id)
+    await call.answer("Duel ditolak.")
+    await call.message.edit_text("❌ Tantangan duel dadu ditolak.")
+
+
+# --- STATISTIK TAMU (/bill, /topcharm) ---
+@dp.message(Command("bill"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_check_bill(message: types.Message):
+    user = message.from_user
+    async with db.pool.acquire() as conn:
+        await _sync_tg_user(conn, user)
+        row = await conn.fetchrow(
+            "SELECT coins, charm_points, is_vip, vip_until, vip_booth_name FROM users WHERE user_id = $1",
+            user.id,
+        )
+
+    if not row:
+        return await message.reply("Silakan kirim 1 pesan di grup terlebih dahulu untuk membuka tab tamu.")
+
+    is_vip = bool(row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
+    status = f"👑 VIP Reserve (s/d {row['vip_until'].strftime('%d %b %H:%M UTC')})" if is_vip else "🥂 Reguler Guest"
+    booth = f"\n• <b>VIP Booth:</b> {html.escape(row['vip_booth_name'])}" if row["vip_booth_name"] else ""
+    await message.reply(
+        f"🧾 <b>CATATAN TAB — {html.escape(user.first_name)}</b>\n\n"
+        f"• <b>Saldo Dompet:</b> <b>{row['coins'] or 0} VC</b>\n"
+        f"• <b>Charm Points:</b> <b>{row['charm_points'] or 0} ✨</b>\n"
+        f"• <b>Status:</b> {status}{booth}",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.message(Command("topcharm"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_top_charm(message: types.Message):
+    async with db.pool.acquire() as conn:
+        rows = await conn.fetch("SELECT full_name, charm_points FROM users ORDER BY COALESCE(charm_points, 0) DESC LIMIT 10")
+    lines = [
+        f"{idx}. <b>{html.escape(r['full_name'])}</b> — <b>{r['charm_points'] or 0} ✨</b>"
+        for idx, r in enumerate(rows, start=1)
+    ] or ["<i>Belum ada data.</i>"]
+    await message.reply(
+        "✨ <b>TOP 10 MOST CHARMING GUESTS — THE VELVET HOUR</b>\n\n" + "\n".join(lines),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+# --- SISTEM SHIFT KERJA ---
+@dp.message(Command("apply"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_apply_shift(message: types.Message):
+    parts = (message.text or "").split()
+    if len(parts) < 2 or parts[1].lower() not in SHIFT_ROLES:
+        return await message.reply(
+            "💼 <b>LOWONGAN SHIFT BAR (20 Menit — Upah 50 VC)</b>\n"
+            "Pilih posisi: <code>/apply waiter</code>, <code>/apply bartender</code>, atau <code>/apply host</code>",
+            parse_mode=ParseMode.HTML,
+        )
+
+    role_key = parts[1].lower()
+    meta = SHIFT_ROLES[role_key]
+    user = message.from_user
+    today = datetime.utcnow().date()
+    now = datetime.utcnow()
+
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
+            await _sync_tg_user(conn, user)
+            await conn.execute("DELETE FROM active_shifts WHERE ends_at <= $1", now)
+            existing = await conn.fetchrow("SELECT role_name FROM active_shifts WHERE user_id = $1", user.id)
+            if existing:
+                return await message.reply(f"Kamu sedang menjalani shift sebagai <b>{existing['role_name']}</b>.", parse_mode=ParseMode.HTML)
+
+            active_count = await conn.fetchval("SELECT COUNT(*) FROM active_shifts WHERE role_name = $1", role_key) or 0
+            if active_count >= meta["quota"]:
+                return await message.reply(f"Kuota shift <b>{meta['title']}</b> sedang penuh ({meta['quota']}/{meta['quota']}).", parse_mode=ParseMode.HTML)
+
+            daily_cnt = await conn.fetchval(
+                "SELECT count FROM shift_daily_counts WHERE user_id = $1 AND shift_date = $2",
+                user.id, today
+            ) or 0
+            if daily_cnt >= 3:
+                return await message.reply("Kamu sudah mencapai batas maksimal <b>3x shift</b> hari ini.", parse_mode=ParseMode.HTML)
+
+            ends_at = now + timedelta(minutes=20)
+            await conn.execute("""
+                INSERT INTO active_shifts (user_id, role_name, started_at, ends_at, service_count)
+                VALUES ($1, $2, $3, $4, 0)
+            """, user.id, role_key, now, ends_at)
+
+    await react_msg(message.chat.id, message.message_id, "💼")
+    await message.reply(
+        f"💼 <b>SHIFT DIMULAI — {meta['title'].upper()}</b>\n\n"
+        f"{_mention(user.id, user.first_name)} resmi bertugas selama <b>20 menit</b>!\n"
+        f"• <b>Tugas Layanan:</b> {meta['cmds']}\n"
+        f"• <b>Syarat Upah (50 VC):</b> Selesaikan minimal <b>5x layanan</b> lalu ketik <code>/endshift</code>.",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def _record_shift_service(message: types.Message, allowed_role: str, action_text: str):
+    user = message.from_user
+    async with db.pool.acquire() as conn:
+        shift = await conn.fetchrow("SELECT * FROM active_shifts WHERE user_id = $1", user.id)
+        if not shift or shift["role_name"] != allowed_role:
+            return await message.reply(f"Perintah ini khusus staf yang sedang shift <b>{allowed_role}</b>.", parse_mode=ParseMode.HTML)
+        new_cnt = (shift["service_count"] or 0) + 1
+        await conn.execute("UPDATE active_shifts SET service_count = $1 WHERE user_id = $2", new_cnt, user.id)
+
+    await react_msg(message.chat.id, message.message_id, "✅")
+    await message.reply(f"{action_text}\n<i>(Progres Layanan Shift: <b>{new_cnt}/5</b>)</i>", parse_mode=ParseMode.HTML)
+
+
+@dp.message(Command("mix"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_shift_mix(message: types.Message):
+    drink = html.escape((message.text or "").split(maxsplit=1)[1][:50]) if len((message.text or "").split()) > 1 else "Velvet Signature Cocktail"
+    await _record_shift_service(message, "bartender", f"🍸 Bartender {_mention(message.from_user.id, message.from_user.first_name)} meracik <b>{drink}</b> dengan gerakan shaker presisi!")
+
+
+@dp.message(Command("sober"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_shift_sober(message: types.Message):
+    target = html.escape((message.text or "").split(maxsplit=1)[1][:40]) if len((message.text or "").split()) > 1 else "tamu lounge"
+    await _record_shift_service(message, "bartender", f"🧊 Bartender {_mention(message.from_user.id, message.from_user.first_name)} menyajikan segelas air dingin & tonik segar untuk <b>{target}</b>.")
+
+
+@dp.message(Command("welcome"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_shift_welcome(message: types.Message):
+    target = html.escape((message.text or "").split(maxsplit=1)[1][:40]) if len((message.text or "").split()) > 1 else "tamu baru"
+    await _record_shift_service(message, "waiter", f"🥂 Waiter {_mention(message.from_user.id, message.from_user.first_name)} menyambut hangat <b>{target}</b> dan mengantarnya ke meja terbaik.")
+
+
+@dp.message(Command("dish"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_shift_dish(message: types.Message):
+    dish = html.escape((message.text or "").split(maxsplit=1)[1][:50]) if len((message.text or "").split()) > 1 else "Chef's Platter"
+    await _record_shift_service(message, "waiter", f"🍽️ Waiter {_mention(message.from_user.id, message.from_user.first_name)} mengantarkan hidangan <b>{dish}</b> ke meja tamu.")
+
+
+@dp.message(Command("ambience"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_shift_ambience(message: types.Message):
+    await _record_shift_service(message, "host", f"🕯️ Host {_mention(message.from_user.id, message.from_user.first_name)} meredupkan lampu kristal dan menyalakan lilin aromaterapi di seluruh ruangan.")
+
+
+@dp.message(Command("toastall"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_shift_toastall(message: types.Message):
+    await _record_shift_service(message, "host", f"🥂 Host {_mention(message.from_user.id, message.from_user.first_name)} mengangkat gelas tinggi-tinggi mengajak seluruh tamu bersulang untuk malam yang indah!")
+
+
+@dp.message(Command("myshift"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_my_shift(message: types.Message):
+    user = message.from_user
+    async with db.pool.acquire() as conn:
+        shift = await conn.fetchrow("SELECT * FROM active_shifts WHERE user_id = $1", user.id)
+    if not shift:
+        return await message.reply("Kamu sedang tidak dalam jadwal shift aktif.")
+    rem = max(0, int((shift["ends_at"] - datetime.utcnow()).total_seconds() // 60))
+    await message.reply(
+        f"📋 <b>STATUS SHIFT — {html.escape(user.first_name)}</b>\n"
+        f"• <b>Posisi:</b> {shift['role_name'].upper()}\n"
+        f"• <b>Layanan Selesai:</b> <b>{shift['service_count']}/5</b>\n"
+        f"• <b>Sisa Waktu:</b> ~{rem} menit",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.message(Command("endshift"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_end_shift(message: types.Message):
+    user = message.from_user
+    today = datetime.utcnow().date()
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
+            shift = await conn.fetchrow("SELECT * FROM active_shifts WHERE user_id = $1 FOR UPDATE", user.id)
+            if not shift:
+                return await message.reply("Tidak ada shift aktif yang perlu diselesaikan.")
+            await conn.execute("DELETE FROM active_shifts WHERE user_id = $1", user.id)
+
+            if (shift["service_count"] or 0) < 5:
+                return await message.reply(
+                    f"⚠️ Shift diakhiri lebih awal dengan layanan <b>{shift['service_count']}/5</b> (belum memenuhi syarat upah 50 VC).",
+                    parse_mode=ParseMode.HTML,
+                )
+
+            await conn.execute("UPDATE users SET coins = coins + 50 WHERE user_id = $1", user.id)
+            await conn.execute("""
+                INSERT INTO shift_daily_counts (user_id, shift_date, count)
+                VALUES ($1, $2, 1)
+                ON CONFLICT (user_id, shift_date) DO UPDATE SET count = shift_daily_counts.count + 1;
+            """, user.id, today)
+            await _log_tx(conn, user.id, 50, f"Upah Shift {shift['role_name'].upper()}")
+
+    await react_msg(message.chat.id, message.message_id, "💰")
+    await message.reply(
+        f"💰 <b>SHIFT SELESAI — UPAH CAIR!</b>\n\n"
+        f"Terima kasih atas kerja kerasmu, {_mention(user.id, user.first_name)}!\n"
+        f"• <b>Upah Diterima:</b> <b>+50 Velvet Coins</b>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+# --- EARNING +1 VC/MENIT & AUTO-SYNC USERNAME UNTUK CHAT RP AKTIF DI GRUP ---
+@dp.message(F.chat.type.in_({"group", "supergroup"}), F.text)
+async def passive_rp_coin_earner(message: types.Message):
+    if not message.from_user or message.from_user.is_bot:
+        return
+    if message.text.startswith("/"):
+        return
+
+    uid = message.from_user.id
+    now = datetime.utcnow()
+    last = _last_chat_earn.get(uid)
+    earn_delta = 1 if (len(message.text.split()) >= 3 and (not last or (now - last).total_seconds() >= 60)) else 0
+    if earn_delta:
+        _last_chat_earn[uid] = now
+
+    async with db.pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO users (user_id, username, full_name, coins, charm_points)
+            VALUES ($1, $2, $3, $4, 0)
+            ON CONFLICT (user_id) DO UPDATE SET
+                username = COALESCE(EXCLUDED.username, users.username),
+                full_name = EXCLUDED.full_name,
+                coins = users.coins + $5;
+        """, uid, message.from_user.username, message.from_user.full_name, 50 + earn_delta, earn_delta)
+
+
+async def register_julian_commands():
+    group_cmds = [
+        BotCommand(command="menu", description="Buka Buku Menu & Jukebox Interaktif (Mini App)"),
+        BotCommand(command="order", description="Pesan minuman (atau buka menu)"),
+        BotCommand(command="eat", description="Pesan hidangan dapur (atau buka menu)"),
+        BotCommand(command="treat", description="Traktir tamu lain (+5 Charm untuk penerima)"),
+        BotCommand(command="booth", description="[VIP] Reservasi meja booth eksklusif"),
+        BotCommand(command="slot", description="Putar mesin slot bar (10-100 VC)"),
+        BotCommand(command="dart", description="Duel lempar dart 1v1 berhadiah VC"),
+        BotCommand(command="dice", description="Duel dadu 1v1 berhadiah VC"),
+        BotCommand(command="mystery", description="Buka Velvet Mystery Box (40 VC)"),
+        BotCommand(command="bill", description="Cek saldo VC, Charm & status VIP"),
+        BotCommand(command="topcharm", description="Lihat Top 10 Tamu Paling Memesona"),
+        BotCommand(command="apply", description="Ambil shift kerja (waiter/bartender/host)"),
+    ]
+    await bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
+
+
+async def main():
+    await db.init_db()
+    await ensure_julian_schema()
+    await register_julian_commands()
+    await start_webapp_server()
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
