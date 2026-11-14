@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>The Velvet Hour — Menu & Jukebox</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      --bg: #100b0f;
+      --card: #1b1319;
+      --gold: #dfb866;
+      --gold-dim: rgba(223, 184, 102, 0.25);
+      --crimson: #7a1f34;
+      --cream: #f5efe6;
+      --muted: #a69c95;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--cream); padding-bottom: 90px; }
+
+    header {
+      background: linear-gradient(180deg, #2b121b 0%, var(--bg) 100%);
+      padding: 18px 16px 12px;
+      border-bottom: 1px solid var(--gold-dim);
+      position: sticky; top: 0; z-index: 10;
+    }
+    .brand { font-size: 11px; letter-spacing: 2px; color: var(--gold); font-weight: 700; }
+    .title-row { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
+    h1 { font-size: 20px; font-weight: 700; }
+    .badge-vc {
+      background: rgba(223, 184, 102, 0.14);
+      border: 1px solid var(--gold);
+      color: var(--gold);
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .tabs {
+      display: flex; gap: 8px; padding: 12px 16px;
+      background: var(--bg); position: sticky; top: 68px; z-index: 9;
+    }
+    .tab {
+      flex: 1; padding: 10px 6px; border-radius: 10px; border: 1px solid var(--gold-dim);
+      background: var(--card); color: var(--muted); font-size: 13px; font-weight: 600;
+      text-align: center; cursor: pointer; transition: 0.2s;
+    }
+    .tab.active {
+      background: linear-gradient(135deg, #4b1725, #29141d);
+      border-color: var(--gold); color: var(--gold);
+    }
+
+    .section { display: none; padding: 4px 16px; }
+    .section.active { display: block; }
+    .sub-title {
+      font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px;
+      color: var(--gold); margin: 14px 0 8px; font-weight: 700;
+    }
+
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .item-card {
+      background: var(--card); border: 1px solid var(--gold-dim);
+      border-radius: 14px; padding: 12px; display: flex; flex-direction: column;
+      justify-content: space-between;
+    }
+    .item-card.vip { border-color: rgba(223, 184, 102, 0.65); background: linear-gradient(160deg, #241914, #181116); }
+    .item-emoji { font-size: 26px; margin-bottom: 6px; }
+    .item-name { font-size: 14px; font-weight: 700; margin-bottom: 3px; }
+    .item-desc { font-size: 11px; color: var(--muted); line-height: 1.35; margin-bottom: 10px; }
+    .item-footer { display: flex; justify-content: space-between; align-items: center; }
+    .price { font-size: 12px; font-weight: 700; color: var(--gold); }
+
+    .btn-order {
+      background: var(--gold); color: #140f0b; border: none; border-radius: 8px;
+      padding: 6px 12px; font-size: 12px; font-weight: 700; cursor: pointer;
+    }
+    .btn-order:disabled { opacity: 0.5; }
+
+    .jukebox-box {
+      background: var(--card); border: 1px solid var(--gold-dim);
+      border-radius: 14px; padding: 16px; margin-top: 10px;
+    }
+    .input-field {
+      width: 100%; background: #100b0f; border: 1px solid var(--gold-dim);
+      color: var(--cream); padding: 12px; border-radius: 10px; font-size: 14px;
+      margin: 10px 0 14px; outline: none;
+    }
+    .input-field:focus { border-color: var(--gold); }
+    .btn-full {
+      width: 100%; background: linear-gradient(135deg, #dfb866, #b88c38);
+      color: #140f0b; border: none; padding: 13px; border-radius: 10px;
+      font-size: 14px; font-weight: 800; cursor: pointer;
+    }
+
+    .toast {
+      position: fixed; bottom: 20px; left: 16px; right: 16px;
+      background: #23181e; border: 1px solid var(--gold); color: var(--cream);
+      padding: 12px 14px; border-radius: 12px; font-size: 13px; text-align: center;
+      display: none; z-index: 99; box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">THE VELVET HOUR  •  LOUNGE CONCIERGE</div>
+    <div class="title-row">
+      <h1 id="guest-name">Selamat Malam</h1>
+      <div class="badge-vc" id="guest-balance">Memuat...</div>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('drinks', this)">🍸 Minuman</div>
+    <div class="tab" onclick="switchTab('food', this)">🍽️ Hidangan</div>
+    <div class="tab" onclick="switchTab('music', this)">🎶 Jukebox</div>
+  </div>
+
+  <!-- TAB MINUMAN -->
+  <div id="tab-drinks" class="section active">
+    <div class="sub-title">Signature & Classic Drinks (Gratis)</div>
+    <div class="grid" id="grid-drinks-reg"></div>
+
+    <div class="sub-title">✨ VIP Reserve Cellar (Gratis VIP / 15 VC)</div>
+    <div class="grid" id="grid-drinks-vip"></div>
+  </div>
+
+  <!-- TAB MAKANAN -->
+  <div id="tab-food" class="section">
+    <div class="sub-title">Midnight Kitchen (Gratis)</div>
+    <div class="grid" id="grid-food-reg"></div>
+
+    <div class="sub-title">✨ Chef's VIP Gastronomy (Gratis VIP / 15 VC)</div>
+    <div class="grid" id="grid-food-vip"></div>
+  </div>
+
+  <!-- TAB JUKEBOX -->
+  <div id="tab-music" class="section">
+    <div class="jukebox-box">
+      <div style="font-size: 15px; font-weight: 700; color: var(--gold);">🎧 Request Lagu ke Kaelen DJ</div>
+      <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">
+        Lagu akan langsung masuk antrean & diumumkan oleh Kaelen di grup (Biaya: <b>10 VC</b>, Gratis untuk VIP).
+      </div>
+      <input type="text" id="song-input" class="input-field" placeholder="Contoh: Apocalypse - Cigarettes After Sex" />
+      <button class="btn-full" onclick="submitSong()">🎶 Putar di Ruang Utama</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    const tg = window.Telegram.WebApp;
+    tg.ready();
+    tg.expand();
+
+    const MENUS = {
+      drinksReg: [
+        { code: "negroni", emoji: "🥃", name: "Classic Negroni", desc: "Gin, Campari & sweet vermouth dengan kulit jeruk.", price: 0 },
+        { code: "whisky", emoji: "🧊", name: "Smoked Whisky", desc: "Single malt bourbon dengan es batu kristal besar.", price: 0 },
+        { code: "mojito", emoji: "🌿", name: "Velvet Mojito", desc: "Daun mint segar, perasan lime & soda dingin.", price: 0 },
+        { code: "espresso", emoji: "☕", name: "Double Espresso", desc: "Ekstraksi kopi panggang gelap pekat.", price: 0 },
+        { code: "latte", emoji: "🥛", name: "Caramel Latte", desc: "Espresso lembut dengan steamed milk & karamel.", price: 0 },
+        { code: "mocktail", emoji: "🍹", name: "Crimson Sunset", desc: "Sirup delima, cranberry & tonic non-alkohol.", price: 0 },
+      ],
+      drinksVip: [
+        { code: "vip_dom", emoji: "🍾", name: "Dom Pérignon Vintage", desc: "Sampanye Prancis eksklusif dalam ember es.", price: 15, vip: true },
+        { code: "vip_blue", emoji: "💎", name: "Blue Label Reserve", desc: "Blended Scotch langka dengan aroma kayu ek.", price: 15, vip: true },
+        { code: "vip_absinthe", emoji: "🧪", name: "Emerald Absinthe", desc: "Disajikan dengan sendok gula karamel terbakar.", price: 15, vip: true },
+        { code: "vip_royal", emoji: "👑", name: "Velvet Royal Martini", desc: "Vodka premium dengan taburan edible gold leaf.", price: 15, vip: true },
+      ],
+      foodReg: [
+        { code: "steak", emoji: "🥩", name: "Ribeye Steak", desc: "Daging panggang medium-rare dengan saus lada hitam.", price: 0 },
+        { code: "pasta", emoji: "🍝", name: "Truffle Carbonara", desc: "Spaghetti creamy dengan jamur truffle & keju.", price: 0 },
+        { code: "fries", emoji: "🍟", name: "Truffle Parmesan Fries", desc: "Kentang goreng renyah tabur keju parmesan.", price: 0 },
+        { code: "platter", emoji: "🧀", name: "Charcuterie Board", desc: "Aneka keju artisan, buah kering & crackers.", price: 0 },
+        { code: "tiramisu", emoji: "🍰", name: "Espresso Tiramisu", desc: "Dessert klasik Italia berlapis krim mascarpone.", price: 0 },
+        { code: "croissant", emoji: "🥐", name: "Butter Croissant", desc: "Pastry hangat renyah berlapis mentega Prancis.", price: 0 },
+      ],
+      foodVip: [
+        { code: "vip_a5", emoji: "🥩", name: "Miyazaki Wagyu A5", desc: "Potongan wagyu Jepang lumer dengan garam laut.", price: 15, vip: true },
+        { code: "vip_caviar", emoji: "🥄", name: "Beluga Caviar Blinis", desc: "Kaviar hitam premium dengan krim asam lembut.", price: 15, vip: true },
+        { code: "vip_lobster", emoji: "🦞", name: "Butter Poached Lobster", desc: "Lobster utuh panggang mentega bawang putih.", price: 15, vip: true },
+        { code: "vip_gold", emoji: "🍫", name: "24K Gold Dark Truffle", desc: "Cokelat ganache hitam berlapis emas murni.", price: 15, vip: true },
+      ]
+    };
+
+    let isVipUser = false;
+
+    function showToast(msg) {
+      const t = document.getElementById("toast");
+      t.innerText = msg;
+      t.style.display = "block";
+      setTimeout(() => { t.style.display = "none"; }, 3500);
+    }
+
+    function renderGrid(list, containerId, category) {
+      const box = document.getElementById(containerId);
+      box.innerHTML = list.map(item => {
+        const priceLabel = item.price === 0 ? "Gratis" : (isVipUser ? "Gratis (VIP)" : `${item.price} VC`);
+        return `
+          <div class="item-card ${item.vip ? 'vip' : ''}">
+            <div>
+              <div class="item-emoji">${item.emoji}</div>
+              <div class="item-name">${item.name}</div>
+              <div class="item-desc">${item.desc}</div>
+            </div>
+            <div class="item-footer">
+              <span class="price">${priceLabel}</span>
+              <button class="btn-order" onclick="placeOrder('${category}', '${item.code}', '${item.name}', ${item.price})">Pesan</button>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderAllMenus() {
+      renderGrid(MENUS.drinksReg, "grid-drinks-reg", "drink");
+      renderGrid(MENUS.drinksVip, "grid-drinks-vip", "drink");
+      renderGrid(MENUS.foodReg, "grid-food-reg", "food");
+      renderGrid(MENUS.foodVip, "grid-food-vip", "food");
+    }
+
+    function switchTab(tabName, el) {
+      document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+      document.querySelectorAll(".section").forEach(s => s.classList.remove("active"));
+      el.classList.add("active");
+      document.getElementById("tab-" + tabName).classList.add("active");
+    }
+
+    async function loadUserProfile() {
+      if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+        document.getElementById("guest-name").innerText = tg.initDataUnsafe.user.first_name;
+      }
+      try {
+        const res = await fetch("/api/me", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ initData: tg.initData })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          isVipUser = data.is_vip;
+          document.getElementById("guest-balance").innerText = `${data.coins} VC ${data.is_vip ? '• VIP' : ''}`;
+          renderAllMenus();
+        }
+      } catch (e) {
+        renderAllMenus();
+      }
+    }
+
+    async function placeOrder(category, code, itemName, price) {
+      tg.HapticFeedback.impactOccurred("medium");
+      showToast(`Memesan ${itemName} ke Julian...`);
+      try {
+        const res = await fetch("/api/order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            initData: tg.initData,
+            category: category,
+            code: code,
+            item_name: itemName,
+            price: price
+          })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          document.getElementById("guest-balance").innerText = `${data.new_coins} VC ${isVipUser ? '• VIP' : ''}`;
+          showToast("✅ Pesanan dikirim! Julian sudah menyajikannya di grup.");
+          setTimeout(() => tg.close(), 900);
+        } else {
+          showToast("⚠️ " + (data.error || "Gagal memesan."));
+        }
+      } catch (err) {
+        showToast("⚠️ Koneksi ke bar terputus.");
+      }
+    }
+
+    async function submitSong() {
+      const song = document.getElementById("song-input").value.trim();
+      if (song.length < 3) return showToast("⚠️ Ketik judul lagu terlebih dahulu.");
+      tg.HapticFeedback.impactOccurred("medium");
+      showToast("Mengirim request lagu ke Kaelen...");
+      try {
+        const res = await fetch("/api/order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            initData: tg.initData,
+            category: "song",
+            code: "reqsong",
+            item_name: song,
+            price: 10
+          })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          showToast("🎶 Lagu masuk antrean Kaelen di grup!");
+          setTimeout(() => tg.close(), 900);
+        } else {
+          showToast("⚠️ " + (data.error || "Gagal request lagu."));
+        }
+      } catch (err) {
+        showToast("⚠️ Koneksi gagal.");
+      }
+    }
+
+    renderAllMenus();
+    loadUserProfile();
+  </script>
+</body>
+</html>
