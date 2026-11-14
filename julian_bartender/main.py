@@ -100,6 +100,21 @@ async def react_msg(chat_id: int, message_id: int, emoji: str = "🥂"):
 async def ensure_julian_schema():
     async with db.pool.acquire() as conn:
         await conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                username TEXT,
+                full_name TEXT,
+                coins INTEGER DEFAULT 50,
+                charm_points INTEGER DEFAULT 0,
+                is_vip BOOLEAN DEFAULT FALSE,
+                vip_until TIMESTAMP WITHOUT TIME ZONE,
+                vip_booth_name TEXT,
+                is_admin BOOLEAN DEFAULT FALSE
+            );
+        """)
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS charm_points INTEGER DEFAULT 0;")
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS vip_booth_name TEXT;")
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS active_shifts (
                 user_id BIGINT PRIMARY KEY,
                 role_name TEXT NOT NULL,
@@ -132,8 +147,8 @@ async def _sync_tg_user(conn, tg_user: types.User):
     if not tg_user or tg_user.is_bot:
         return
     await conn.execute("""
-        INSERT INTO users (user_id, username, full_name, coins, charm_points, joined_at)
-        VALUES ($1, $2, $3, 50, 0, NOW())
+        INSERT INTO users (user_id, username, full_name, coins, charm_points)
+        VALUES ($1, $2, $3, 50, 0)
         ON CONFLICT (user_id) DO UPDATE SET
             username = COALESCE(EXCLUDED.username, users.username),
             full_name = EXCLUDED.full_name;
@@ -920,8 +935,8 @@ async def passive_rp_coin_earner(message: types.Message):
 
     async with db.pool.acquire() as conn:
         await conn.execute("""
-            INSERT INTO users (user_id, username, full_name, coins, charm_points, joined_at)
-            VALUES ($1, $2, $3, $4, 0, NOW())
+            INSERT INTO users (user_id, username, full_name, coins, charm_points)
+            VALUES ($1, $2, $3, $4, 0)
             ON CONFLICT (user_id) DO UPDATE SET
                 username = COALESCE(EXCLUDED.username, users.username),
                 full_name = EXCLUDED.full_name,
