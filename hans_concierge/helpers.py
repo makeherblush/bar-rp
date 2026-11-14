@@ -79,6 +79,10 @@ def styled_btn(
     return InlineKeyboardButton.model_construct(**data)
 
 
+def _is_valid_tg_link(link: str | None) -> bool:
+    return bool(link and link.startswith("https://") and link.rstrip("/") != "https://t.me")
+
+
 async def ensure_hans_schema():
     async with db.pool.acquire() as conn:
         await conn.execute("""
@@ -253,6 +257,18 @@ async def main_lobby_kb(user_id: int | None = None) -> InlineKeyboardMarkup:
             styled_btn(lbl_confess, callback_data="menu_confess", icon_emoji_id=ico_confess),
             styled_btn(lbl_promote, callback_data="menu_promote", icon_emoji_id=ico_promote),
         ],
+    ]
+
+    # Baris pintasan URL menuju CH_INFO_LINK dan CH_PROMOTE_LINK
+    channel_links_row = []
+    if _is_valid_tg_link(CH_INFO_LINK):
+        channel_links_row.append(styled_btn("📢 Channel Info", url=CH_INFO_LINK))
+    if _is_valid_tg_link(CH_PROMOTE_LINK):
+        channel_links_row.append(styled_btn("📣 Channel Promote", url=CH_PROMOTE_LINK))
+    if channel_links_row:
+        rows.append(channel_links_row)
+
+    rows.extend([
         [
             styled_btn(lbl_wallet, callback_data="my_wallet", icon_emoji_id=ico_wallet),
             styled_btn(lbl_daily, callback_data="claim_daily", style="success", icon_emoji_id=ico_daily),
@@ -269,7 +285,7 @@ async def main_lobby_kb(user_id: int | None = None) -> InlineKeyboardMarkup:
             styled_btn("🎁 Kirim Gift / Hadiah", callback_data="menu_gift"),
             styled_btn("📖 Buku Panduan Bar", callback_data="info_menu"),
         ],
-    ]
+    ])
 
     if is_admin_or_owner:
         rows.insert(0, [styled_btn("🛡️ Panel Kontrol Admin / Owner", callback_data="open_admin_panel", style="danger")])
