@@ -1,3 +1,4 @@
+import os
 import asyncio
 import logging
 from datetime import datetime, timedelta
@@ -30,7 +31,14 @@ from julian_bartender.bar_service import router as bar_service_router
 from julian_bartender.games import router as games_router
 from julian_bartender.shifts import router as shifts_router
 
+try:
+    from hans_concierge.webapp_server import start_webapp_server
+except Exception as e:
+    start_webapp_server = None
+    logging.warning("Gagal import start_webapp_server: %s", e)
+
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("julian_bartender")
 
 dp = Dispatcher(storage=MemoryStorage())
 # Urutan penting: vip_booth_router didaftarkan pertama agar proteksi topik berjalan sebelum handler lain
@@ -82,7 +90,7 @@ async def _sync_member_tags_worker():
                     if not in_shift:
                         await set_guest_tag(GROUP_ID, r["user_id"], None)
         except Exception as e:
-            logging.debug("Tag sync worker skip: %s", e)
+            logger.warning("Tag sync worker skip: %s", e)
 
         await asyncio.sleep(30)
 
@@ -150,11 +158,11 @@ async def register_julian_commands():
         try:
             await bot.set_my_commands(group_cmds, scope=BotCommandScopeChat(chat_id=GROUP_ID))
         except Exception as e:
-            logging.warning("Gagal set command scope chat GROUP_ID: %s", e)
+            logger.warning("Gagal set command scope chat GROUP_ID: %s", e)
 
     await bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
 
-    if WEBAPP_DIRECT_URL.startswith("https://") and not WEBAPP_DIRECT_URL.startswith("https://t.me/"):
+    if WEBAPP_DIRECT_URL and WEBAPP_DIRECT_URL.startswith("https://") and not WEBAPP_DIRECT_URL.startswith("https://t.me/"):
         try:
             await bot.set_chat_menu_button(
                 menu_button=MenuButtonWebApp(
@@ -162,15 +170,29 @@ async def register_julian_commands():
                     web_app=WebAppInfo(url=WEBAPP_DIRECT_URL),
                 )
             )
-        except Exception:
-            pass
+            logger.info("MenuButtonWebApp terpasang ke: %s", WEBAPP_DIRECT_URL)
+        except Exception as e:
+            logger.warning("Gagal pasang MenuButtonWebApp: %s", e)
+    else:
+        logger.warning("WEBAPP_DIRECT_URL belum valid untuk Mini App: %s", WEBAPP_DIRECT_URL)
 
 
 async def main():
     await db.init_db()
     await ensure_julian_schema()
+
+    if start_webapp_server is not None:
+        try:
+            await start_webapp_server()
+            port = os.environ.get("PORT", "8080")
+            logger.info("Web App server aktif di 0.0.0.0:%s", port)
+        except Exception as e:
+            logger.exception("Gagal menjalankan Web App server: %s", e)
+
     await register_julian_commands()
+    await bot.delete_webhook(drop_pending_updates=False)
     asyncio.create_task(_sync_member_tags_worker())
+    logger.info("Julian Vance bot mulai polling...")
     await dp.start_polling(bot)
 
 
