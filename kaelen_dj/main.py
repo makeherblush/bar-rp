@@ -3,6 +3,7 @@ import json
 import html
 import glob
 import time
+import random
 import asyncio
 import logging
 import urllib.parse
@@ -65,6 +66,7 @@ assistant: Client | None = None
 call_py: PyTgCalls | None = None
 _play_lock: asyncio.Lock | None = None
 _tg_bot_lock: asyncio.Lock | None = None
+_vault_accessible: bool = True
 
 
 @dataclass
@@ -426,11 +428,11 @@ async def _ensure_voice_chat_open_and_muted():
             await assistant.invoke(
                 functions.phone.CreateGroupCall(
                     peer=peer,
-                    random_id=assistant.rnd_id(),
+                    random_id=random.randint(1, 2147483647),
                     title="🎶 The Velvet Hour — DJ Booth",
                 )
             )
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(1.5)
             full = await assistant.invoke(functions.channels.GetFullChannel(channel=peer))
             call = getattr(full.full_chat, "call", None)
 
@@ -496,9 +498,36 @@ async def _enforce_os_listener_mute(client: Client, update, users, chats):
         pass
 
 
+async def _warmup_assistant_peers():
+    """Memuat dialog agar Peer ID GROUP_ID & MUSIC_VAULT_ID langsung dikenali Pyrogram."""
+    global _vault_accessible
+    try:
+        async for _ in assistant.get_dialogs(limit=100):
+            pass
+    except Exception as e:
+        logger.debug("Gagal sync dialogs asisten: %s", e)
+
+    try:
+        await assistant.get_chat(GROUP_ID)
+    except Exception as e:
+        logger.warning("Akun asisten belum mengenali GROUP_ID %s: %s", GROUP_ID, e)
+
+    if MUSIC_VAULT_ID:
+        try:
+            await assistant.get_chat(MUSIC_VAULT_ID)
+            _vault_accessible = True
+        except Exception as e:
+            _vault_accessible = False
+            logger.warning(
+                "MUSIC_VAULT_ID %s tidak bisa diakses oleh akun asisten (pastikan asisten sudah join channel/grup vault): %s",
+                MUSIC_VAULT_ID,
+                e,
+            )
+
+
 # --- JALUR 1: MUSIC_VAULT_ID ---
 async def _search_music_vault(query: str) -> dict | None:
-    if not MUSIC_VAULT_ID:
+    if not MUSIC_VAULT_ID or not _vault_accessible:
         return None
     try:
         async for msg in assistant.search_messages(chat_id=MUSIC_VAULT_ID, query=query, limit=10):
@@ -580,7 +609,7 @@ async def _fetch_via_tg_music_bot(query: str) -> dict | None:
                     continue
 
                 archived_link = ""
-                if MUSIC_VAULT_ID:
+                if MUSIC_VAULT_ID and _vault_accessible:
                     try:
                         copied = await assistant.copy_message(
                             chat_id=MUSIC_VAULT_ID,
@@ -692,6 +721,8 @@ async def _play_next_in_queue():
 
         try:
             call = await _ensure_voice_chat_open_and_muted()
+            if not call:
+                raise RuntimeError("Obrolan Suara tidak dapat dibuka. Pastikan akun asisten adalah Admin grup dengan izin Kelola Obrolan Video.")
 
             stream = MediaStream(
                 next_track.stream_url,
@@ -1110,6 +1141,7 @@ async def main():
     await assistant.start()
     me = await assistant.get_me()
     _assistant_user_id = me.id
+    await _warmup_assistant_peers()
     await _get_privileged_os_user_ids(force_refresh=True)
     await call_py.start()
     logger.info(
