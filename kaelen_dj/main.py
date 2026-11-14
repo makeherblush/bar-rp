@@ -10,7 +10,6 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 
-import yt_dlp
 from pyrogram import Client
 from pyrogram.raw import functions, types as raw_types
 from pytgcalls import PyTgCalls
@@ -28,7 +27,7 @@ import shared.config as cfg
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("kaelen_dj")
 
-GROUP_ID = cfg.GROUP_ID
+GROUP_ID = int(cfg.GROUP_ID)
 OWNER_ID = int(cfg.OWNER_ID)
 SONG_REQUEST_COST = 10
 AUTO_DELETE_DELAY = 45
@@ -96,6 +95,19 @@ def _format_duration(seconds: int | float | None) -> str:
     mins, rem = divmod(sec, 60)
     hrs, mins = divmod(mins, 60)
     return f"{hrs}:{mins:02d}:{rem:02d}" if hrs else f"{mins}:{rem:02d}"
+
+
+def _is_actively_playing_in_os() -> bool:
+    """Cek status riil PyTgCalls agar current_track tidak pernah nyangkut."""
+    if not call_py or current_track is None:
+        return False
+    try:
+        active_calls = getattr(call_py, "calls", None)
+        if isinstance(active_calls, dict):
+            return GROUP_ID in active_calls
+    except Exception:
+        pass
+    return True
 
 
 def _cleanup_old_cache(keep_path: str | None = None):
@@ -183,6 +195,8 @@ async def ensure_kaelen_schema():
             );
         """)
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_thread_id BIGINT;")
+        # Bersihkan antrean lama yang tertinggal saat bot restart
+        await conn.execute("UPDATE song_requests SET status = 'expired' WHERE status IN ('queued', 'playing');")
 
 
 async def _send_kaelen_msg(text: str, thread_id: int | None = None, auto_delete: int = AUTO_DELETE_DELAY):
@@ -210,7 +224,6 @@ async def _send_kaelen_msg(text: str, thread_id: int | None = None, auto_delete:
 
 # --- STRICT LISTEN-ONLY OS (HANYA OWNER & ASISTEN YANG BISA BICARA/UNMUTE) ---
 async def _mute_all_non_owners(call):
-    """Paksa mute semua peserta di OS kecuali OWNER_ID dan akun asisten."""
     if not call:
         return
     try:
@@ -261,7 +274,6 @@ async def _ensure_voice_chat_open_and_muted():
 
         if call:
             try:
-                # Kunci setting OS agar semua anggota baru otomatis masuk dalam status muted (hanya dengar)
                 await assistant.invoke(
                     functions.phone.ToggleGroupCallSettings(
                         call=call,
@@ -294,7 +306,6 @@ async def _unmute_assistant_in_call(call):
 
 
 async def _enforce_os_listener_mute(client: Client, update, users, chats):
-    """Kunci real-time: setiap peserta selain Owner & Asisten yang mencoba unmute/raise hand langsung dipaksa mute."""
     if not isinstance(update, raw_types.UpdateGroupCallParticipants):
         return
     try:
@@ -564,6 +575,8 @@ async def enqueue_song_request(
     db_req_id: int | None = None,
     announce_queue: bool = True,
 ) -> bool:
+    global current_track, is_paused
+
     info = await resolve_audio_track(query)
     if not info:
         if db_req_id:
@@ -586,6 +599,12 @@ async def enqueue_song_request(
         db_req_id=db_req_id,
         source_label=info.get("source_label", "Music Vault"),
     )
+
+    # Jika PyTgCalls sedang tidak aktif memutar di OS, reset current_track agar langsung play
+    if current_track is not None and not _is_actively_playing_in_os():
+        current_track = None
+        is_paused = False
+
     music_queue.append(track)
 
     if current_track is None:
@@ -603,7 +622,7 @@ async def enqueue_song_request(
 
 
 async def _poll_webapp_song_queue():
-    await asyncio.sleep(3)
+    await asyncio.sleep(2)
     while True:
         try:
             async with db.pool.acquire() as conn:
@@ -625,18 +644,19 @@ async def _poll_webapp_song_queue():
                 rname = r["requester_name"] or "Tamu Lounge"
                 title = r["song_title"]
                 tid = r["thread_id"]
+                logger.info("Memproses request web: '%s' dari %s (id=%s)", title, rname, r["id"])
                 await enqueue_song_request(
                     query=title,
                     uid=uid,
                     requester_name=rname,
                     thread_id=tid,
                     db_req_id=r["id"],
-                    announce_queue=(current_track is not None),
+                    announce_queue=True,
                 )
         except Exception as e:
             logger.error("Error polling song_requests: %s", e)
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
 
 
 @dp.message(Command("play", "reqsong"), F.chat.type.in_({"group", "supergroup"}))
