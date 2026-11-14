@@ -8,6 +8,8 @@ from pydantic import Field
 from aiogram import Bot, types
 from aiogram.methods import TelegramMethod
 from aiogram.types import (
+    BotCommand,
+    BotCommandScopeChatMember,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     ReactionTypeEmoji,
@@ -18,6 +20,7 @@ import shared.database as db
 import shared.config as cfg
 
 bot = Bot(token=cfg.TOKEN_JULIAN)
+hans_bot = Bot(token=cfg.TOKEN_HANS) if getattr(cfg, "TOKEN_HANS", None) else bot
 
 OWNER_ID = cfg.OWNER_ID
 GROUP_ID = cfg.GROUP_ID
@@ -27,6 +30,11 @@ WEBAPP_DIRECT_URL = (
     or os.environ.get("WEBAPP_URL")
     or MINIAPP_MENU_URL
 )
+
+SHIFT_MAX_MINUTES = 20
+SHIFT_REQUIRED_ACTIONS = 5
+SHIFT_REWARD_VC = 50
+MAX_SHIFTS_PER_DAY = 3
 
 DEFAULT_SERVICE_GIFS = {
     "drink": "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExbGZ4eG9yNnR5bW5wZ3J6b2R4Y2Y1bTZ2Y2F2eG9yNnR5bW5wZ3J6eiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/l41lJ8ywG1ncm9FXW/giphy.gif",
@@ -166,13 +174,13 @@ SHIFT_ROLES = {
         "title": "Waiter / Server",
         "tag": "🥂 Waiter On-Duty",
         "quota": 4,
-        "cmds": "/welcome @user & /dish Nama Makanan",
+        "cmds": "/welcome @user, /dish Nama Makanan, atau /eat & /treat",
     },
     "bartender": {
         "title": "Bartender",
         "tag": "🍸 Bartender",
         "quota": 2,
-        "cmds": "/mix Nama Minuman & /sober @user",
+        "cmds": "/mix Nama Minuman, /sober @user, atau /order & /treat",
     },
     "host": {
         "title": "Lounge Host",
@@ -180,10 +188,131 @@ SHIFT_ROLES = {
         "quota": 2,
         "cmds": "/ambience & /toastall",
     },
+    "dj": {
+        "title": "Resident DJ",
+        "tag": "🎧 Resident DJ",
+        "quota": 1,
+        "cmds": "/spinmusic Lagu - Penyanyi, /dedicate, /skip",
+    },
 }
 
 VIP_DEFAULT_TAG = "👑 VIP Guest"
 booth_access_cache: dict[int, dict] = {}
+
+
+def get_base_group_commands() -> list[BotCommand]:
+    return [
+        BotCommand(command="menu", description="Buka Buku Menu & Jukebox Interaktif"),
+        BotCommand(command="gift", description="Kirim hadiah mewah bergambar +Charm"),
+        BotCommand(command="order", description="Pesan minuman atau buka daftar minuman"),
+        BotCommand(command="eat", description="Pesan hidangan dapur atau buka menu makanan"),
+        BotCommand(command="treat", description="Traktir tamu lain +5 Charm untuk penerima"),
+        BotCommand(command="booth", description="VIP Buka topik VIP Booth eksklusif"),
+        BotCommand(command="invitebooth", description="VIP Undang tamu ke topik VIP Booth kamu"),
+        BotCommand(command="kickbooth", description="VIP Cabut akses tamu dari VIP Booth kamu"),
+        BotCommand(command="closebooth", description="VIP Tutup topik VIP Booth aktif"),
+        BotCommand(command="slot", description="Putar mesin slot bar 10-100 VC"),
+        BotCommand(command="dart", description="Duel lempar dart 1v1 berhadiah VC"),
+        BotCommand(command="dice", description="Duel dadu 1v1 berhadiah VC"),
+        BotCommand(command="mystery", description="Buka Velvet Mystery Box 40 VC"),
+        BotCommand(command="bill", description="Cek saldo VC, Charm & status VIP"),
+        BotCommand(command="topcharm", description="Lihat Top 10 Tamu Paling Memesona"),
+        BotCommand(command="apply", description="Ambil shift kerja waiter/bartender/host/dj"),
+        BotCommand(command="myshift", description="Cek sisa waktu & progres layanan shift"),
+        BotCommand(command="endshift", description="Selesaikan shift & cairkan upah VC"),
+        BotCommand(command="mix", description="Tugas Bartender: racik minuman"),
+        BotCommand(command="sober", description="Tugas Bartender: sadarkan tamu"),
+        BotCommand(command="welcome", description="Tugas Waiter: sambut tamu baru"),
+        BotCommand(command="dish", description="Tugas Waiter: antar hidangan"),
+        BotCommand(command="ambience", description="Tugas Host: atur suasana lounge"),
+        BotCommand(command="toastall", description="Tugas Host: ajak seluruh tamu bersulang"),
+    ]
+
+
+ROLE_EXTRA_COMMANDS = {
+    "bartender": [
+        BotCommand(command="mix", description="TUGAS SHIFT: Racik minuman spesial bar"),
+        BotCommand(command="sober", description="TUGAS SHIFT: Beri kopi penawar mabuk tamu"),
+    ],
+    "waiter": [
+        BotCommand(command="welcome", description="TUGAS SHIFT: Sambut hangat tamu baru"),
+        BotCommand(command="dish", description="TUGAS SHIFT: Antar hidangan dari dapur"),
+    ],
+    "host": [
+        BotCommand(command="ambience", description="TUGAS SHIFT: Atur pencahayaan & suasana lounge"),
+        BotCommand(command="toastall", description="TUGAS SHIFT: Ajak seluruh tamu bersulang"),
+    ],
+    "dj": [
+        BotCommand(command="spinmusic", description="TUGAS SHIFT: Putar musik dari meja DJ"),
+        BotCommand(command="dedicate", description="TUGAS SHIFT: Dedikasikan lagu untuk tamu"),
+    ],
+}
+
+
+async def update_member_shift_commands(user_id: int, role: str | None):
+    if not GROUP_ID:
+        return
+    base = get_base_group_commands()
+    if role and role in ROLE_EXTRA_COMMANDS:
+        extra = ROLE_EXTRA_COMMANDS[role]
+        extra_names = {c.command for c in extra}
+        cmds = extra + [c for c in base if c.command not in extra_names]
+    else:
+        cmds = base
+
+    try:
+        await bot.set_my_commands(
+            cmds,
+            scope=BotCommandScopeChatMember(chat_id=GROUP_ID, user_id=user_id),
+        )
+    except Exception as e:
+        logging.debug("Gagal update_member_shift_commands untuk %s: %s", user_id, e)
+
+
+async def add_shift_action(user_id: int, allowed_roles: tuple[str, ...] | None = None) -> tuple[int, bool]:
+    """Menambah progres service_count +1 otomatis jika user sedang shift aktif."""
+    now = datetime.utcnow()
+    async with db.pool.acquire() as conn:
+        if allowed_roles:
+            new_val = await conn.fetchval(
+                """
+                UPDATE active_shifts
+                SET service_count = COALESCE(service_count, 0) + 1
+                WHERE user_id = $1
+                  AND ends_at > $2
+                  AND LOWER(role_name) = ANY($3::text[])
+                RETURNING service_count
+                """,
+                user_id,
+                now,
+                [r.lower() for r in allowed_roles],
+            )
+        else:
+            new_val = await conn.fetchval(
+                """
+                UPDATE active_shifts
+                SET service_count = COALESCE(service_count, 0) + 1
+                WHERE user_id = $1
+                  AND ends_at > $2
+                RETURNING service_count
+                """,
+                user_id,
+                now,
+            )
+        if new_val is None:
+            return 0, False
+        return int(new_val), True
+
+
+def format_shift_progress_note(cnt: int, is_active: bool) -> str:
+    if not is_active:
+        return ""
+    if cnt >= SHIFT_REQUIRED_ACTIONS:
+        return (
+            f"\n\n📊 <i>Progres Shift: <b>{cnt}/{SHIFT_REQUIRED_ACTIONS}</b> layanan "
+            f"— Target tercapai! Ketik <code>/endshift</code> untuk mencairkan <b>+{SHIFT_REWARD_VC} VC</b>.</i>"
+        )
+    return f"\n\n📊 <i>Progres Shift: <b>{cnt}/{SHIFT_REQUIRED_ACTIONS}</b> layanan</i>"
 
 
 class SetChatMemberTag(TelegramMethod[bool]):
@@ -210,6 +339,14 @@ async def restore_default_guest_tag(conn, chat_id: int, user_id: int):
     row = await conn.fetchrow("SELECT is_vip, vip_until FROM users WHERE user_id = $1", user_id)
     is_vip = bool(row and row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
     await set_guest_tag(chat_id, user_id, VIP_DEFAULT_TAG if is_vip else None)
+
+
+async def is_staff_or_owner(user_id: int) -> bool:
+    if user_id == OWNER_ID:
+        return True
+    async with db.pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT is_admin FROM users WHERE user_id = $1", user_id)
+        return bool(row and row["is_admin"])
 
 
 def styled_btn(
@@ -255,6 +392,12 @@ async def schedule_delete(chat_id: int, message_ids: list[int], delay: int = 45)
                 pass
 
     asyncio.create_task(_worker())
+
+
+async def reply_and_autodelete(message: types.Message, text: str, delay: int = 45) -> types.Message:
+    sent = await message.reply(text, parse_mode=ParseMode.HTML)
+    await schedule_delete(message.chat.id, [sent.message_id], delay=delay)
+    return sent
 
 
 def mention_user(uid: int, name: str) -> str:
@@ -303,13 +446,15 @@ async def ensure_julian_schema():
                 vip_booth_name TEXT,
                 vip_booth_thread_id BIGINT,
                 last_thread_id BIGINT,
-                is_admin BOOLEAN DEFAULT FALSE
+                is_admin BOOLEAN DEFAULT FALSE,
+                is_in_bar BOOLEAN DEFAULT TRUE
             );
         """)
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS charm_points INTEGER DEFAULT 0;")
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS vip_booth_name TEXT;")
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS vip_booth_thread_id BIGINT;")
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_thread_id BIGINT;")
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_in_bar BOOLEAN DEFAULT TRUE;")
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS vip_booth_invites (
                 thread_id BIGINT NOT NULL,
