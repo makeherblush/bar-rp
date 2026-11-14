@@ -5,9 +5,11 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 
+from pydantic import Field
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.methods import TelegramMethod
 from aiogram.types import (
     BotCommand,
     BotCommandScopeAllGroupChats,
@@ -22,7 +24,6 @@ from aiogram.enums import ParseMode
 
 import shared.database as db
 import shared.config as cfg
-from hans_concierge.webapp_server import start_webapp_server
 
 logging.basicConfig(level=logging.INFO)
 
@@ -172,12 +173,60 @@ GIFTS_CATALOG = {
 }
 
 SHIFT_ROLES = {
-    "waiter": {"title": "Waiter / Server", "quota": 4, "cmds": "/welcome @user & /dish Nama Makanan"},
-    "bartender": {"title": "Bartender", "quota": 2, "cmds": "/mix Nama Minuman & /sober @user"},
-    "host": {"title": "Lounge Host", "quota": 2, "cmds": "/ambience & /toastall"},
+    "waiter": {
+        "title": "Waiter / Server",
+        "tag": "🥂 Waiter On-Duty",
+        "quota": 4,
+        "cmds": "/welcome @user & /dish Nama Makanan",
+    },
+    "bartender": {
+        "title": "Bartender",
+        "tag": "🍸 Bartender",
+        "quota": 2,
+        "cmds": "/mix Nama Minuman & /sober @user",
+    },
+    "host": {
+        "title": "Lounge Host",
+        "tag": "🕯️ Lounge Host",
+        "quota": 2,
+        "cmds": "/ambience & /toastall",
+    },
 }
 
+VIP_DEFAULT_TAG = "👑 VIP Guest"
+
 _last_chat_earn: dict[int, datetime] = {}
+
+
+class SetChatMemberTag(TelegramMethod[bool]):
+    __returning__ = bool
+    __api_method__ = "setChatMemberTag"
+
+    chat_id: int | str
+    user_id: int
+    tag: str | None = Field(default=None)
+
+
+async def set_guest_tag(chat_id: int, user_id: int, tag: str | None) -> bool:
+    """Memasang tag khusus di samping nama member (maks 16 karakter) atau menghapusnya."""
+    if user_id == OWNER_ID:
+        return False
+    clean_tag = tag[:16] if tag else ""
+    try:
+        return await bot(SetChatMemberTag(chat_id=chat_id, user_id=user_id, tag=clean_tag))
+    except Exception as e:
+        logging.debug("Gagal setChatMemberTag untuk %s: %s", user_id, e)
+        return False
+
+
+async def restore_default_guest_tag(conn, chat_id: int, user_id: int):
+    """Kembalikan tag member ke VIP jika masih aktif, atau hapus tag jika tamu reguler."""
+    row = await conn.fetchrow(
+        "SELECT is_vip, vip_until FROM users WHERE user_id = $1",
+        user_id,
+    )
+    is_vip = bool(row and row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
+    await set_guest_tag(chat_id, user_id, VIP_DEFAULT_TAG if is_vip else None)
 
 
 def styled_btn(
@@ -372,6 +421,54 @@ async def _get_service_media(category: str) -> tuple[str, str]:
     return DEFAULT_SERVICE_GIFS.get(category, DEFAULT_SERVICE_GIFS["drink"]), "animation"
 
 
+# --- WORKER SINKRONISASI MEMBER TAG (SHIFT & VIP) ---
+async def _sync_member_tags_worker():
+    """Sinkronisasi otomatis tag VIP aktif, VIP habis masa berlaku, dan shift yang sudah selesai."""
+    await asyncio.sleep(5)
+    while True:
+        try:
+            now = datetime.utcnow()
+            async with db.pool.acquire() as conn:
+                # 1. Bersihkan shift yang waktunya habis (> 20 menit) & kembalikan tag aslinya
+                expired_shifts = await conn.fetch(
+                    "DELETE FROM active_shifts WHERE ends_at <= $1 RETURNING user_id",
+                    now,
+                )
+                for r in expired_shifts:
+                    await restore_default_guest_tag(conn, GROUP_ID, r["user_id"])
+
+                # 2. Pasang tag VIP untuk tamu VIP aktif yang sedang TIDAK mengambil shift
+                active_vips = await conn.fetch("""
+                    SELECT u.user_id
+                    FROM users u
+                    LEFT JOIN active_shifts s ON s.user_id = u.user_id
+                    WHERE u.is_vip = TRUE
+                      AND u.vip_until > $1
+                      AND s.user_id IS NULL
+                """, now)
+                for r in active_vips:
+                    await set_guest_tag(GROUP_ID, r["user_id"], VIP_DEFAULT_TAG)
+
+                # 3. Hapus tag VIP jika masa aktif sudah habis & tandai is_vip = FALSE
+                expired_vips = await conn.fetch("""
+                    UPDATE users
+                    SET is_vip = FALSE
+                    WHERE is_vip = TRUE AND vip_until <= $1
+                    RETURNING user_id
+                """, now)
+                for r in expired_vips:
+                    in_shift = await conn.fetchval(
+                        "SELECT 1 FROM active_shifts WHERE user_id = $1",
+                        r["user_id"],
+                    )
+                    if not in_shift:
+                        await set_guest_tag(GROUP_ID, r["user_id"], None)
+        except Exception as e:
+            logging.debug("Tag sync worker skip: %s", e)
+
+        await asyncio.sleep(30)
+
+
 # --- SAPAAN BARTENDER UNTUK MEMBER BARU ---
 @dp.message(F.chat.type.in_({"group", "supergroup"}), F.new_chat_members)
 async def on_member_join_bar(message: types.Message):
@@ -382,6 +479,7 @@ async def on_member_join_bar(message: types.Message):
     async with db.pool.acquire() as conn:
         for guest in new_guests:
             await _sync_tg_user(conn, guest, message.message_thread_id)
+            await restore_default_guest_tag(conn, message.chat.id, guest.id)
 
     mentions = ", ".join(_mention(u.id, u.first_name) for u in new_guests)
     greeting_text = random.choice(BARTENDER_GREETINGS).format(mention=mentions)
@@ -1442,7 +1540,7 @@ async def cmd_top_charm(message: types.Message):
     await _schedule_delete(message.chat.id, [message.message_id, msg.message_id], delay=60)
 
 
-# --- SISTEM SHIFT KERJA ---
+# --- SISTEM SHIFT KERJA + AUTO MEMBER TAG ---
 @dp.message(Command("apply"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_apply_shift(message: types.Message):
     parts = (message.text or "").split()
@@ -1463,7 +1561,10 @@ async def cmd_apply_shift(message: types.Message):
     async with db.pool.acquire() as conn:
         async with conn.transaction():
             await _sync_tg_user(conn, user, message.message_thread_id)
-            await conn.execute("DELETE FROM active_shifts WHERE ends_at <= $1", now)
+            expired_rows = await conn.fetch("DELETE FROM active_shifts WHERE ends_at <= $1 RETURNING user_id", now)
+            for exp in expired_rows:
+                await restore_default_guest_tag(conn, message.chat.id, exp["user_id"])
+
             existing = await conn.fetchrow("SELECT role_name FROM active_shifts WHERE user_id = $1", user.id)
             if existing:
                 err_msg = await message.reply(f"Kamu sedang menjalani shift sebagai <b>{existing['role_name']}</b>.", parse_mode=ParseMode.HTML)
@@ -1491,6 +1592,7 @@ async def cmd_apply_shift(message: types.Message):
                 VALUES ($1, $2, $3, $4, 0)
             """, user.id, role_key, now, ends_at)
 
+    await set_guest_tag(message.chat.id, user.id, meta["tag"])
     await react_msg(message.chat.id, message.message_id, "💼")
     await message.reply(
         f"💼 {_mention(user.id, user.first_name)} mulai bertugas sebagai <b>{meta['title']}</b> (20 menit).\n"
@@ -1553,7 +1655,9 @@ async def cmd_my_shift(message: types.Message):
     user = message.from_user
     now = datetime.utcnow()
     async with db.pool.acquire() as conn:
-        await conn.execute("DELETE FROM active_shifts WHERE ends_at <= $1", now)
+        expired_rows = await conn.fetch("DELETE FROM active_shifts WHERE ends_at <= $1 RETURNING user_id", now)
+        for exp in expired_rows:
+            await restore_default_guest_tag(conn, message.chat.id, exp["user_id"])
         shift = await conn.fetchrow("SELECT * FROM active_shifts WHERE user_id = $1", user.id)
     if not shift:
         err_msg = await message.reply("Kamu sedang tidak dalam jadwal shift aktif.")
@@ -1581,6 +1685,7 @@ async def cmd_end_shift(message: types.Message):
             await conn.execute("DELETE FROM active_shifts WHERE user_id = $1", user.id)
 
             if (shift["service_count"] or 0) < 5:
+                await restore_default_guest_tag(conn, message.chat.id, user.id)
                 err_msg = await message.reply(
                     f"Shift diakhiri lebih awal dengan layanan <b>{shift['service_count']}/5</b> (belum memenuhi syarat upah 50 VC).",
                     parse_mode=ParseMode.HTML,
@@ -1595,6 +1700,8 @@ async def cmd_end_shift(message: types.Message):
                 ON CONFLICT (user_id, shift_date) DO UPDATE SET count = shift_daily_counts.count + 1;
             """, user.id, today)
             await _log_tx(conn, user.id, 50, f"Upah Shift {shift['role_name'].upper()}")
+
+        await restore_default_guest_tag(conn, message.chat.id, user.id)
 
     await react_msg(message.chat.id, message.message_id, "💰")
     await message.reply(
@@ -1670,7 +1777,7 @@ async def main():
     await db.init_db()
     await ensure_julian_schema()
     await register_julian_commands()
-    await start_webapp_server()
+    asyncio.create_task(_sync_member_tags_worker())
     await dp.start_polling(bot)
 
 
