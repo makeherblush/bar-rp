@@ -1,3 +1,4 @@
+import os
 import html
 import random
 import asyncio
@@ -10,9 +11,12 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     BotCommand,
     BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    MenuButtonWebApp,
     ReactionTypeEmoji,
+    WebAppInfo,
 )
 from aiogram.enums import ParseMode
 
@@ -28,11 +32,22 @@ dp = Dispatcher(storage=MemoryStorage())
 OWNER_ID = cfg.OWNER_ID
 GROUP_ID = cfg.GROUP_ID
 MINIAPP_MENU_URL = "https://t.me/JulianVanceVH_bot/menu"
+WEBAPP_DIRECT_URL = (
+    getattr(cfg, "WEBAPP_URL", None)
+    or os.environ.get("WEBAPP_URL")
+    or MINIAPP_MENU_URL
+)
 
 DEFAULT_SERVICE_GIFS = {
     "drink": "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExbGZ4eG9yNnR5bW5wZ3J6b2R4Y2Y1bTZ2Y2F2eG9yNnR5bW5wZ3J6eiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/l41lJ8ywG1ncm9FXW/giphy.gif",
     "food": "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExd2J4cW12bG14Y2Y1bTZ2Y2F2eG9yNnR5bW5wZ3J6b2R4Y2Y1bTZ2eiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3o7TKP9ln2Dr6ze6f6/giphy.gif",
 }
+
+BARTENDER_GREETINGS = [
+    "🍸 <i>Julian menghentikan sejenak gerakan shaker-nya, mengelap gelas kristal dengan kain linen bersih, lalu menatap ke arah pintu masuk.</i>\n\n\"Selamat malam, {mention}. Selamat datang di <b>The Velvet Hour</b>. Duduklah di mana pun Anda merasa nyaman—gelas pertama selalu siap diracik untuk tamu baru.\"",
+    "🥂 <i>Dentingan lembut es batu di dalam gelas menyambut langkah kaki yang baru tiba di lantai lounge. Julian tersenyum tipis dari balik meja bar mahoni.</i>\n\n\"Malam yang indah untuk singgah, {mention}. Silakan lihat buku menu kami jika ingin memesan minuman atau sekadar menikmati alunan musik malam ini.\"",
+    "🕯️ <i>Cahaya lampu gantung temaram memantul di permukaan botol-botol kristal saat pintu beludru terbuka. Julian mengangguk sopan menyambut kedatangan tamu baru.</i>\n\n\"Selamat datang di <b>The Velvet Hour</b>, {mention}. Meja bar selalu terbuka—beri tahu saya jika Anda butuh sesuatu untuk menghangatkan suasana.\"",
+]
 
 DRINKS_CATALOG = {
     "espresso": ("Double Espresso", 0, False),
@@ -169,6 +184,7 @@ def styled_btn(
     text: str,
     callback_data: str | None = None,
     url: str | None = None,
+    web_app: WebAppInfo | None = None,
     style: str | None = None,
     icon_emoji_id: str | None = None,
 ) -> InlineKeyboardButton:
@@ -177,6 +193,8 @@ def styled_btn(
         data["callback_data"] = callback_data
     if url:
         data["url"] = url
+    if web_app:
+        data["web_app"] = web_app
     if style:
         data["style"] = style
     if icon_emoji_id:
@@ -337,10 +355,12 @@ def _mention(uid: int, name: str) -> str:
     return f'<a href="tg://user?id={uid}">{html.escape(name)}</a>'
 
 
-def miniapp_menu_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [styled_btn("🍸 Buka Buku Menu & Jukebox", url=MINIAPP_MENU_URL, style="primary")]
-    ])
+def miniapp_menu_kb(is_private: bool = False) -> InlineKeyboardMarkup:
+    if is_private and WEBAPP_DIRECT_URL.startswith("https://") and not WEBAPP_DIRECT_URL.startswith("https://t.me/"):
+        btn = styled_btn("🍸 Buka Buku Menu & Jukebox", web_app=WebAppInfo(url=WEBAPP_DIRECT_URL), style="primary")
+    else:
+        btn = styled_btn("🍸 Buka Buku Menu & Jukebox", url=MINIAPP_MENU_URL, style="primary")
+    return InlineKeyboardMarkup(inline_keyboard=[[btn]])
 
 
 async def _get_service_media(category: str) -> tuple[str, str]:
@@ -350,6 +370,63 @@ async def _get_service_media(category: str) -> tuple[str, str]:
         if row:
             return row["file_id"], row["media_type"]
     return DEFAULT_SERVICE_GIFS.get(category, DEFAULT_SERVICE_GIFS["drink"]), "animation"
+
+
+# --- SAPAAN BARTENDER UNTUK MEMBER BARU ---
+@dp.message(F.chat.type.in_({"group", "supergroup"}), F.new_chat_members)
+async def on_member_join_bar(message: types.Message):
+    new_guests = [u for u in (message.new_chat_members or []) if not u.is_bot]
+    if not new_guests:
+        return
+
+    async with db.pool.acquire() as conn:
+        for guest in new_guests:
+            await _sync_tg_user(conn, guest, message.message_thread_id)
+
+    mentions = ", ".join(_mention(u.id, u.first_name) for u in new_guests)
+    greeting_text = random.choice(BARTENDER_GREETINGS).format(mention=mentions)
+    greeting_text += "\n\n<i>(Saldo awal <b>50 VC</b> telah disiapkan di tab Anda. Tekan tombol di bawah atau ketik <code>/menu</code> untuk melihat daftar sajian.)</i>"
+
+    sent = await message.answer(
+        greeting_text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=miniapp_menu_kb(is_private=False),
+    )
+    await _schedule_delete(message.chat.id, [sent.message_id], delay=60)
+
+
+# --- PRIVATE CHAT (PC) BOT: ARAHKAN BUKA MINI APP MENU ---
+@dp.message(Command("start"), F.chat.type == "private")
+async def cmd_private_start(message: types.Message):
+    user = message.from_user
+    async with db.pool.acquire() as conn:
+        await _sync_tg_user(conn, user)
+
+    await react_msg(message.chat.id, message.message_id, "🥂")
+    await message.answer(
+        f"🥂 <i>Julian meletakkan buku menu berlapis beludru merah di atas meja bar untuk {_mention(user.id, user.first_name)}.</i>\n\n"
+        f"Selamat datang di <b>The Velvet Hour</b>.\n"
+        f"Untuk membuka katalog minuman, hidangan, lapak, dan jukebox interaktif:\n"
+        f"• Tekan tombol <b>Menu</b> di pojok kiri bawah kolom ketik Anda,\n"
+        f"• Ketik perintah <code>/menu</code>, atau\n"
+        f"• Tekan tombol di bawah ini:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=miniapp_menu_kb(is_private=True),
+    )
+
+
+@dp.message(F.chat.type == "private", F.text, ~F.text.startswith("/"))
+async def handle_private_text_prompt(message: types.Message):
+    user = message.from_user
+    async with db.pool.acquire() as conn:
+        await _sync_tg_user(conn, user)
+
+    await message.answer(
+        "🍸 <i>Julian mengangguk sopan dari balik meja bar.</i>\n\n"
+        "Silakan tekan tombol <b>Menu</b> di pojok kiri bawah keyboard, ketik <code>/menu</code>, atau klik tombol di bawah untuk membuka Buku Menu Web:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=miniapp_menu_kb(is_private=True),
+    )
 
 
 # --- KONFIGURASI MEDIA GIF/FOTO MENU & GIFT (OWNER) ---
@@ -611,16 +688,27 @@ async def cmd_send_gift(message: types.Message):
 
 
 # --- BUKA MINI APP MENU & JUKEBOX (/menu, /order, /eat) ---
-@dp.message(Command("menu"), F.chat.type.in_({"group", "supergroup"}))
+@dp.message(Command("menu"))
 async def cmd_menu_miniapp(message: types.Message):
+    is_private = message.chat.type == "private"
     async with db.pool.acquire() as conn:
-        await _sync_tg_user(conn, message.from_user, message.message_thread_id)
+        await _sync_tg_user(conn, message.from_user, None if is_private else message.message_thread_id)
     await react_msg(message.chat.id, message.message_id, "🥂")
+
+    if is_private:
+        await message.answer(
+            "🥂 <i>Julian membuka tablet menu beludru di hadapanmu.</i>\n"
+            "Klik tombol di bawah (atau tombol <b>Menu</b> di kiri bawah keyboard) untuk membuka Web Menu & Jukebox:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=miniapp_menu_kb(is_private=True),
+        )
+        return
+
     msg = await message.reply(
         "🥂 <i>Julian meletakkan tablet menu beludru di atas meja bar.</i>\n"
         "Silakan pilih minuman, racik koktail, hidangan, atau lagu jukebox:",
         parse_mode=ParseMode.HTML,
-        reply_markup=miniapp_menu_kb(),
+        reply_markup=miniapp_menu_kb(is_private=False),
     )
     await _schedule_delete(message.chat.id, [message.message_id, msg.message_id], delay=60)
 
@@ -784,7 +872,11 @@ async def cmd_eat_food(message: types.Message):
 async def cmd_treat_guest(message: types.Message):
     sender = message.from_user
     parts = (message.text or "").split(maxsplit=2)
-    has_reply = bool(message.reply_to_message and message.reply_to_message.from_user)
+    has_reply = bool(
+        message.reply_to_message
+        and message.reply_to_message.from_user
+        and not message.reply_to_message.from_user.is_bot
+    )
 
     if len(parts) < 2 and not has_reply:
         err_msg = await message.reply(
@@ -869,7 +961,6 @@ async def cmd_vip_booth(message: types.Message):
         thread_id = None
         is_renamed = False
 
-        # Coba ubah nama topik jika sudah punya booth aktif
         if existing_tid:
             try:
                 await bot.edit_forum_topic(
@@ -882,7 +973,6 @@ async def cmd_vip_booth(message: types.Message):
             except Exception:
                 thread_id = None
 
-        # Buat topik forum baru jika belum ada atau topik lama sudah dihapus
         if not thread_id:
             try:
                 topic = await bot.create_forum_topic(
@@ -907,7 +997,6 @@ async def cmd_vip_booth(message: types.Message):
 
     await react_msg(message.chat.id, message.message_id, "👑")
 
-    # Kirim pesan sambutan RP langsung di dalam topik VIP Booth baru
     try:
         if is_renamed:
             await bot.send_message(
@@ -934,7 +1023,6 @@ async def cmd_vip_booth(message: types.Message):
     except Exception:
         pass
 
-    # Buat link langsung menuju topik baru jika chat supergroup memiliki ID -100...
     chat_str = str(message.chat.id)
     if chat_str.startswith("-100"):
         topic_link = f"https://t.me/c/{chat_str[4:]}/{thread_id}"
@@ -1463,13 +1551,15 @@ async def cmd_shift_toastall(message: types.Message):
 @dp.message(Command("myshift"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_my_shift(message: types.Message):
     user = message.from_user
+    now = datetime.utcnow()
     async with db.pool.acquire() as conn:
+        await conn.execute("DELETE FROM active_shifts WHERE ends_at <= $1", now)
         shift = await conn.fetchrow("SELECT * FROM active_shifts WHERE user_id = $1", user.id)
     if not shift:
         err_msg = await message.reply("Kamu sedang tidak dalam jadwal shift aktif.")
         await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=15)
         return
-    rem = max(0, int((shift["ends_at"] - datetime.utcnow()).total_seconds() // 60))
+    rem = max(0, int((shift["ends_at"] - now).total_seconds() // 60))
     msg = await message.reply(
         f"📋 Shift <b>{shift['role_name'].upper()}</b> — Layanan: <b>{shift['service_count']}/5</b> (sisa ~{rem} menit)",
         parse_mode=ParseMode.HTML,
@@ -1557,7 +1647,23 @@ async def register_julian_commands():
         BotCommand(command="topcharm", description="Lihat Top 10 Tamu Paling Memesona"),
         BotCommand(command="apply", description="Ambil shift kerja (waiter/bartender/host)"),
     ]
+    private_cmds = [
+        BotCommand(command="start", description="Sapaan Bartender & Panduan Buku Menu"),
+        BotCommand(command="menu", description="Buka Buku Menu & Jukebox Interaktif"),
+    ]
     await bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
+    await bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
+
+    if WEBAPP_DIRECT_URL.startswith("https://") and not WEBAPP_DIRECT_URL.startswith("https://t.me/"):
+        try:
+            await bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(
+                    text="🍸 Menu",
+                    web_app=WebAppInfo(url=WEBAPP_DIRECT_URL),
+                )
+            )
+        except Exception:
+            pass
 
 
 async def main():
