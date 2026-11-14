@@ -1,3 +1,4 @@
+import html
 from datetime import datetime, timedelta
 
 from aiogram import Router, F, types
@@ -5,27 +6,88 @@ from aiogram.filters import Command, CommandObject
 from aiogram.enums import ParseMode
 
 import shared.database as db
-from shared.config import OWNER_ID, GROUP_ID, REQUIRED_CN_SYMBOL
+from shared.config import OWNER_ID, GROUP_ID
 from julian_bartender.helpers import (
-    bot, hans_bot, SHIFT_MAX_MINUTES, SHIFT_REQUIRED_ACTIONS, SHIFT_REWARD_VC,
-    MAX_SHIFTS_PER_DAY, MAX_ACTIVE_PER_ROLE, ROLE_GUIDES,
-    update_member_shift_commands, reply_and_autodelete,
-    is_staff_or_owner, log_wallet_tx
+    bot,
+    hans_bot,
+    SHIFT_MAX_MINUTES,
+    SHIFT_REQUIRED_ACTIONS,
+    SHIFT_REWARD_VC,
+    MAX_SHIFTS_PER_DAY,
+    MAX_ACTIVE_PER_ROLE,
+    ROLE_GUIDES,
+    update_member_shift_commands,
+    reply_and_autodelete,
+    is_staff_or_owner,
+    log_wallet_tx,
 )
 
 router = Router()
 
+
 async def get_active_shift(user_id: int):
     async with db.pool.acquire() as conn:
-        return await conn.fetchrow("SELECT role, started_at, actions_count FROM active_shifts WHERE user_id = $1", user_id)
-
-async def add_shift_action(user_id: int) -> int:
-    async with db.pool.acquire() as conn:
-        new_val = await conn.fetchval(
-            "UPDATE active_shifts SET actions_count = actions_count + 1 WHERE user_id = $1 RETURNING actions_count",
-            user_id
+        row = await conn.fetchrow(
+            "SELECT role, started_at, actions_count FROM active_shifts WHERE user_id = $1",
+            user_id,
         )
-        return new_val or 0
+        if not row:
+            return None
+        expires_at = row["started_at"] + timedelta(minutes=SHIFT_MAX_MINUTES)
+        if datetime.utcnow() >= expires_at:
+            return None
+        return row
+
+
+async def add_shift_action(user_id: int, allowed_roles: tuple[str, ...] | None = None) -> tuple[int, bool]:
+    """
+    Menambah progres aksi shift +1 secara otomatis jika user sedang shift aktif.
+    Mengembalikan tuple (jumlah_aksi_terbaru, is_active_shift).
+    """
+    now = datetime.utcnow()
+    min_started = now - timedelta(minutes=SHIFT_MAX_MINUTES)
+    async with db.pool.acquire() as conn:
+        if allowed_roles:
+            new_val = await conn.fetchval(
+                """
+                UPDATE active_shifts
+                SET actions_count = COALESCE(actions_count, 0) + 1
+                WHERE user_id = $1
+                  AND started_at > $2
+                  AND LOWER(role) = ANY($3::text[])
+                RETURNING actions_count
+                """,
+                user_id,
+                min_started,
+                [r.lower() for r in allowed_roles],
+            )
+        else:
+            new_val = await conn.fetchval(
+                """
+                UPDATE active_shifts
+                SET actions_count = COALESCE(actions_count, 0) + 1
+                WHERE user_id = $1
+                  AND started_at > $2
+                RETURNING actions_count
+                """,
+                user_id,
+                min_started,
+            )
+        if new_val is None:
+            return 0, False
+        return int(new_val), True
+
+
+def _format_shift_progress(cnt: int, is_active: bool) -> str:
+    if not is_active:
+        return ""
+    if cnt >= SHIFT_REQUIRED_ACTIONS:
+        return (
+            f"\n\n📊 <i>Progres Shift: <b>{cnt}/{SHIFT_REQUIRED_ACTIONS}</b> layanan "
+            f"— Target tercapai! Ketik <code>/endshift</code> untuk mencairkan <b>+{SHIFT_REWARD_VC} VC</b>.</i>"
+        )
+    return f"\n\n📊 <i>Progres Shift: <b>{cnt}/{SHIFT_REQUIRED_ACTIONS}</b> layanan</i>"
+
 
 # --- LAMAR, CEK PROGRES & AKHIRI SHIFT ---
 @router.message(Command("apply"), F.chat.id == GROUP_ID)
@@ -45,7 +107,7 @@ async def cmd_apply(message: types.Message, command: CommandObject):
             f"• <code>/apply host</code> (Slot: <b>{counts.get('host', 0)}/{MAX_ACTIVE_PER_ROLE['host']}</b>) — Pemandu suasana lounge\n"
             f"• <code>/apply dj</code> (Slot: <b>{counts.get('dj', 0)}/{MAX_ACTIVE_PER_ROLE['dj']}</b>) — Pengendali musik ruangan\n\n"
             f"💡 <b>Contoh:</b> Ketik <code>/apply waiter</code> untuk melamar sebagai Waiter.",
-            90
+            90,
         )
 
     user_id = message.from_user.id
@@ -59,7 +121,7 @@ async def cmd_apply(message: types.Message, command: CommandObject):
                 message,
                 f"Kamu sudah bertugas sebagai <b>{already_working['role'].upper()}</b>.\n"
                 "Ketik <code>/myshift</code> untuk cek progres atau <code>/endshift</code> untuk selesai.",
-                60
+                60,
             )
 
         u_row = await conn.fetchrow("SELECT daily_shift_count, last_shift_date FROM users WHERE user_id = $1", user_id)
@@ -69,7 +131,7 @@ async def cmd_apply(message: types.Message, command: CommandObject):
                 message,
                 f"⏳ <b>Kuota Shift Harian Habis ({used_today}/{MAX_SHIFTS_PER_DAY})</b>\n\n"
                 f"Kamu sudah mencapai batas maksimal <b>{MAX_SHIFTS_PER_DAY}x kerja</b> hari ini. Silakan kembali bekerja besok!",
-                60
+                60,
             )
 
         active_in_role = await conn.fetchval("SELECT COUNT(*) FROM active_shifts WHERE role = $1", role)
@@ -78,17 +140,20 @@ async def cmd_apply(message: types.Message, command: CommandObject):
                 message,
                 f"🚫 <b>Slot Posisi {role.upper()} Penuh ({active_in_role}/{max_slot_role})</b>\n\n"
                 "Kuota staf aktif untuk posisi ini sudah penuh. Silakan pilih posisi lain yang masih tersedia.",
-                60
+                60,
             )
 
         new_used_today = used_today + 1
         await conn.execute(
             "UPDATE users SET daily_shift_count = $1, last_shift_date = $2 WHERE user_id = $3",
-            new_used_today, today, user_id
+            new_used_today,
+            today,
+            user_id,
         )
         await conn.execute(
             "INSERT INTO active_shifts (role, user_id, started_at, actions_count) VALUES ($1, $2, NOW(), 0)",
-            role, user_id
+            role,
+            user_id,
         )
 
     await update_member_shift_commands(user_id, role)
@@ -96,14 +161,15 @@ async def cmd_apply(message: types.Message, command: CommandObject):
     title_role, cmd_guide = ROLE_GUIDES[role]
     await message.answer(
         f"💼 <b>SHIFT DIMULAI — {title_role}</b>\n\n"
-        f"<b>{message.from_user.first_name}</b> resmi bertugas selama <b>{SHIFT_MAX_MINUTES} menit</b>! "
+        f"<b>{html.escape(message.from_user.first_name)}</b> resmi bertugas selama <b>{SHIFT_MAX_MINUTES} menit</b>! "
         f"(Kuota harian: <b>{new_used_today}/{MAX_SHIFTS_PER_DAY}</b>)\n\n"
         f"<b>Daftar Tugas ({SHIFT_REQUIRED_ACTIONS}x Layanan):</b>\n"
         f"{cmd_guide}\n\n"
         "• Cek progres: <code>/myshift</code>\n"
         f"• Cairkan gaji <b>{SHIFT_REWARD_VC} VC</b>: <code>/endshift</code>",
-        parse_mode=ParseMode.HTML
+        parse_mode=ParseMode.HTML,
     )
+
 
 @router.message(Command("myshift"), F.chat.id == GROUP_ID)
 async def cmd_myshift(message: types.Message):
@@ -112,7 +178,7 @@ async def cmd_myshift(message: types.Message):
         return await reply_and_autodelete(
             message,
             "Kamu sedang tidak dalam jadwal shift kerja.\nContoh melamar: <code>/apply waiter</code>",
-            60
+            60,
         )
 
     elapsed_mins = int((datetime.utcnow() - shift["started_at"]).total_seconds() / 60)
@@ -126,14 +192,15 @@ async def cmd_myshift(message: types.Message):
     _, cmd_guide = ROLE_GUIDES.get(shift["role"], ("", ""))
     await reply_and_autodelete(
         message,
-        f"📋 <b>STATUS SHIFT — {message.from_user.first_name}</b>\n\n"
+        f"📋 <b>STATUS SHIFT — {html.escape(message.from_user.first_name)}</b>\n\n"
         f"• <b>Posisi:</b> {shift['role'].upper()}\n"
         f"• <b>Progres Layanan:</b> {shift['actions_count']} / {SHIFT_REQUIRED_ACTIONS} kali\n"
         f"• <b>Sisa Waktu:</b> {rem_mins} menit (dari {SHIFT_MAX_MINUTES} menit)\n"
         f"• <b>Status Upah:</b> {status_gaji}\n\n"
         f"<b>Command Tugasmu:</b>\n{cmd_guide}",
-        60
+        60,
     )
+
 
 @router.message(Command("endshift"), F.chat.id == GROUP_ID)
 async def cmd_endshift(message: types.Message):
@@ -149,20 +216,21 @@ async def cmd_endshift(message: types.Message):
             await log_wallet_tx(conn, user_id, SHIFT_REWARD_VC, f"Upah Shift {shift['role'].upper()}")
             msg_txt = (
                 f"💵 <b>SHIFT SELESAI — UPAH {SHIFT_REWARD_VC} VC CAIR!</b>\n\n"
-                f"Bartender Julian menyerahkan amplop berisi <b>+{SHIFT_REWARD_VC} Velvet Coins</b> kepada <b>{message.from_user.first_name}</b> "
+                f"Bartender Julian menyerahkan amplop berisi <b>+{SHIFT_REWARD_VC} Velvet Coins</b> kepada <b>{html.escape(message.from_user.first_name)}</b> "
                 f"atas dedikasinya sebagai <b>{shift['role'].upper()}</b> ({shift['actions_count']} layanan)."
             )
         else:
             msg_txt = (
                 f"📋 <b>SHIFT DIAKHIRI</b>\n\n"
-                f"<b>{message.from_user.first_name}</b> melepas pin <b>{shift['role'].upper()}</b>.\n\n"
+                f"<b>{html.escape(message.from_user.first_name)}</b> melepas pin <b>{shift['role'].upper()}</b>.\n\n"
                 f"<i>(Upah tidak cair karena layanan baru mencapai {shift['actions_count']}/{SHIFT_REQUIRED_ACTIONS} kali).</i>"
             )
 
     await update_member_shift_commands(user_id, None)
     await message.answer(msg_txt, parse_mode=ParseMode.HTML)
 
-# --- AKSI STAF PARUH WAKTU ---
+
+# --- AKSI STAF PARUH WAKTU (AUTO-INCREMENT PROGRES SHIFT) ---
 @router.message(Command("mix"), F.chat.id == GROUP_ID)
 async def cmd_mix(message: types.Message, command: CommandObject):
     shift = await get_active_shift(message.from_user.id)
@@ -171,13 +239,14 @@ async def cmd_mix(message: types.Message, command: CommandObject):
     drink = (command.args or "").strip()
     if not drink:
         return await reply_and_autodelete(message, "Tuliskan nama minuman yang ingin diracik.\nContoh: <code>/mix Midnight Negroni</code>", 45)
-    cnt = await add_shift_action(message.from_user.id)
-    prog = f"\n\n📊 <i>Progres Shift: {cnt}/{SHIFT_REQUIRED_ACTIONS} layanan</i>" if shift else ""
+    cnt, is_active = await add_shift_action(message.from_user.id, ("bartender",))
+    prog = _format_shift_progress(cnt, is_active)
     await reply_and_autodelete(
         message,
-        f"🍸 <b>Bartender {message.from_user.first_name}</b> mengocok shaker perak dengan lihai dan menuangkan <b>{drink}</b> ke gelas kristal dingin!{prog}",
-        120
+        f"🍸 <b>Bartender {html.escape(message.from_user.first_name)}</b> mengocok shaker perak dengan lihai dan menuangkan <b>{html.escape(drink)}</b> ke gelas kristal dingin!{prog}",
+        120,
     )
+
 
 @router.message(Command("sober"), F.chat.id == GROUP_ID)
 async def cmd_sober(message: types.Message, command: CommandObject):
@@ -189,13 +258,14 @@ async def cmd_sober(message: types.Message, command: CommandObject):
         target = message.reply_to_message.from_user.first_name
     if not target:
         return await reply_and_autodelete(message, "Tuliskan username/nama tamu atau balas pesannya.\nContoh: <code>/sober @alvaro</code>", 45)
-    cnt = await add_shift_action(message.from_user.id)
-    prog = f"\n\n📊 <i>Progres Shift: {cnt}/{SHIFT_REQUIRED_ACTIONS} layanan</i>" if shift else ""
+    cnt, is_active = await add_shift_action(message.from_user.id, ("bartender",))
+    prog = _format_shift_progress(cnt, is_active)
     await reply_and_autodelete(
         message,
-        f"☕ <b>Bartender {message.from_user.first_name}</b> menyodorkan secangkir kopi hitam pekat dan air dingin kepada <b>{target}</b> agar kembali segar.{prog}",
-        120
+        f"☕ <b>Bartender {html.escape(message.from_user.first_name)}</b> menyodorkan secangkir kopi hitam pekat dan air dingin kepada <b>{html.escape(target)}</b> agar kembali segar.{prog}",
+        120,
     )
+
 
 @router.message(Command("welcome"), F.chat.id == GROUP_ID)
 async def cmd_welcome_staff(message: types.Message, command: CommandObject):
@@ -207,13 +277,14 @@ async def cmd_welcome_staff(message: types.Message, command: CommandObject):
         target = message.reply_to_message.from_user.first_name
     if not target:
         return await reply_and_autodelete(message, "Tuliskan username/nama tamu yang disambut.\nContoh: <code>/welcome @clara</code>", 45)
-    cnt = await add_shift_action(message.from_user.id)
-    prog = f"\n\n📊 <i>Progres Shift: {cnt}/{SHIFT_REQUIRED_ACTIONS} layanan</i>" if shift else ""
+    cnt, is_active = await add_shift_action(message.from_user.id, ("waiter",))
+    prog = _format_shift_progress(cnt, is_active)
     await reply_and_autodelete(
         message,
-        f"🍽️ <b>Waiter {message.from_user.first_name}</b> menyambut <b>{target}</b> dengan senyum hangat, mengantar ke meja beludru, dan menyalakan lilin meja.{prog}",
-        120
+        f"🍽️ <b>Waiter {html.escape(message.from_user.first_name)}</b> menyambut <b>{html.escape(target)}</b> dengan senyum hangat, mengantar ke meja beludru, dan menyalakan lilin meja.{prog}",
+        120,
     )
+
 
 @router.message(Command("dish"), F.chat.id == GROUP_ID)
 async def cmd_dish(message: types.Message, command: CommandObject):
@@ -223,39 +294,42 @@ async def cmd_dish(message: types.Message, command: CommandObject):
     dish_name = (command.args or "").strip()
     if not dish_name:
         return await reply_and_autodelete(message, "Tuliskan nama hidangan yang diantar.\nContoh: <code>/dish Wagyu Cube Bites</code>", 45)
-    cnt = await add_shift_action(message.from_user.id)
-    prog = f"\n\n📊 <i>Progres Shift: {cnt}/{SHIFT_REQUIRED_ACTIONS} layanan</i>" if shift else ""
+    cnt, is_active = await add_shift_action(message.from_user.id, ("waiter",))
+    prog = _format_shift_progress(cnt, is_active)
     await reply_and_autodelete(
         message,
-        f"🍽️ <b>Waiter {message.from_user.first_name}</b> menyajikan <b>{dish_name}</b> hangat dari dapur langsung ke meja tamu.{prog}",
-        120
+        f"🍽️ <b>Waiter {html.escape(message.from_user.first_name)}</b> menyajikan <b>{html.escape(dish_name)}</b> hangat dari dapur langsung ke meja tamu.{prog}",
+        120,
     )
+
 
 @router.message(Command("ambience"), F.chat.id == GROUP_ID)
 async def cmd_ambience(message: types.Message):
     shift = await get_active_shift(message.from_user.id)
     if (not shift or shift["role"] != "host") and not await is_staff_or_owner(message.from_user.id):
         return await reply_and_autodelete(message, "Khusus staf <b>Host</b>. Contoh melamar: <code>/apply host</code>", 45)
-    cnt = await add_shift_action(message.from_user.id)
-    prog = f"\n\n📊 <i>Progres Shift: {cnt}/{SHIFT_REQUIRED_ACTIONS} layanan</i>" if shift else ""
+    cnt, is_active = await add_shift_action(message.from_user.id, ("host",))
+    prog = _format_shift_progress(cnt, is_active)
     await reply_and_autodelete(
         message,
-        f"🕯️ <b>Host {message.from_user.first_name}</b> meredupkan lampu gantung kristal, menyisakan pendar cahaya lilin hangat yang intim di seluruh penjuru lounge...{prog}",
-        120
+        f"🕯️ <b>Host {html.escape(message.from_user.first_name)}</b> meredupkan lampu gantung kristal, menyisakan pendar cahaya lilin hangat yang intim di seluruh penjuru lounge...{prog}",
+        120,
     )
+
 
 @router.message(Command("toastall"), F.chat.id == GROUP_ID)
 async def cmd_toastall(message: types.Message):
     shift = await get_active_shift(message.from_user.id)
     if (not shift or shift["role"] != "host") and not await is_staff_or_owner(message.from_user.id):
         return await reply_and_autodelete(message, "Khusus staf <b>Host</b>. Contoh melamar: <code>/apply host</code>", 45)
-    cnt = await add_shift_action(message.from_user.id)
-    prog = f"\n\n📊 <i>Progres Shift: {cnt}/{SHIFT_REQUIRED_ACTIONS} layanan</i>" if shift else ""
+    cnt, is_active = await add_shift_action(message.from_user.id, ("host",))
+    prog = _format_shift_progress(cnt, is_active)
     await reply_and_autodelete(
         message,
-        f"🥂 <b>Host {message.from_user.first_name}</b> berdiri di tengah ruangan sambil mengangkat gelas:\n\n<b>\"Mari bersulang untuk malam yang tak terlupakan di The Velvet Hour!\"</b>{prog}",
-        120
+        f"🥂 <b>Host {html.escape(message.from_user.first_name)}</b> berdiri di tengah ruangan sambil mengangkat gelas:\n\n<b>\"Mari bersulang untuk malam yang tak terlupakan di The Velvet Hour!\"</b>{prog}",
+        120,
     )
+
 
 # --- MODERASI ADMIN & OWNER ---
 @router.message(Command("mute"), F.chat.id == GROUP_ID)
@@ -267,12 +341,13 @@ async def cmd_mute(message: types.Message):
     try:
         await bot.restrict_chat_member(GROUP_ID, target.id, types.ChatPermissions(can_send_messages=False), until_date=until)
         await message.answer(
-            f"🔇 <i>Bouncer Hans melangkah mendekat ke meja <b>{target.first_name}</b> dan memberi isyarat tenang.</i>\n\n"
+            f"🔇 <i>Bouncer Hans melangkah mendekat ke meja <b>{html.escape(target.first_name)}</b> dan memberi isyarat tenang.</i>\n\n"
             f"<b>\"Harap tenangkan diri selama 15 menit sebelum kembali berbincang.\"</b>",
-            parse_mode=ParseMode.HTML
+            parse_mode=ParseMode.HTML,
         )
     except Exception as e:
         await reply_and_autodelete(message, f"Gagal mute: {e}", 30)
+
 
 @router.message(Command("kick"), F.chat.id == GROUP_ID)
 async def cmd_kick(message: types.Message):
@@ -285,11 +360,12 @@ async def cmd_kick(message: types.Message):
         async with db.pool.acquire() as conn:
             await conn.execute("UPDATE users SET is_in_bar = FALSE, vip_booth_name = NULL WHERE user_id = $1", target.id)
         await message.answer(
-            f"🚪 <i>Bouncer Hans mencengkeram bahu <b>{target.first_name}</b> dengan tegas dan mengantarnya keluar pintu mahoni.</i>",
-            parse_mode=ParseMode.HTML
+            f"🚪 <i>Bouncer Hans mencengkeram bahu <b>{html.escape(target.first_name)}</b> dengan tegas dan mengantarnya keluar pintu mahoni.</i>",
+            parse_mode=ParseMode.HTML,
         )
     except Exception as e:
         await reply_and_autodelete(message, f"Gagal kick: {e}", 30)
+
 
 @router.message(Command("round"), F.chat.id == GROUP_ID)
 async def cmd_round(message: types.Message):
@@ -303,46 +379,5 @@ async def cmd_round(message: types.Message):
     await message.answer(
         "🍾 <b>ON THE HOUSE — TRAKTIRAN OWNER!</b>\n\n"
         "<i>Bartender Julian membunyikan lonceng kuningan di atas meja bar! Seluruh tamu yang sedang berada di dalam lounge mendapatkan <b>+25 Velvet Coins</b>!</i>",
-        parse_mode=ParseMode.HTML
+        parse_mode=ParseMode.HTML,
     )
-
-# --- LISTENER AKTIVITAS CHAT, KOIN RP & ANTI-LEPAS SIMBOL CN ---
-@router.message(F.chat.id == GROUP_ID, F.text)
-async def on_group_activity(message: types.Message):
-    if message.from_user.is_bot:
-        return
-
-    user = message.from_user
-    user_id = user.id
-
-    if not await is_staff_or_owner(user_id):
-        if REQUIRED_CN_SYMBOL not in (user.full_name or ""):
-            await message.answer(
-                f"🚨 <i>Bouncer Hans menghentikan langkah <b>{user.first_name}</b> di tengah ruangan.</i>\n\n"
-                f"<b>\"Atribut resmi ({REQUIRED_CN_SYMBOL}) tidak terlihat pada namamu. Sesuai aturan, saya harus mengantarmu keluar.\"</b>",
-                parse_mode=ParseMode.HTML
-            )
-            try:
-                await hans_bot.ban_chat_member(GROUP_ID, user_id)
-                await hans_bot.unban_chat_member(GROUP_ID, user_id)
-            except Exception:
-                pass
-            async with db.pool.acquire() as conn:
-                await conn.execute("UPDATE users SET is_in_bar = FALSE, vip_booth_name = NULL WHERE user_id = $1", user_id)
-            return
-
-    words = len(message.text.strip().split())
-    if words >= 3:
-        async with db.pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO users (user_id, username, full_name, is_in_bar, last_active, warned_idle, total_active_mins)
-                VALUES ($1, $2, $3, TRUE, NOW(), FALSE, 1)
-                ON CONFLICT (user_id) DO UPDATE
-                SET username = EXCLUDED.username,
-                    full_name = EXCLUDED.full_name,
-                    is_in_bar = TRUE,
-                    last_active = NOW(),
-                    warned_idle = FALSE,
-                    total_active_mins = users.total_active_mins + 1,
-                    coins = users.coins + 1;
-            """, user_id, user.username or "NoUsername", user.full_name)
