@@ -18,6 +18,7 @@ from aiogram.enums import ParseMode
 
 import shared.database as db
 import shared.config as cfg
+from hans_concierge.webapp_server import start_webapp_server
 
 logging.basicConfig(level=logging.INFO)
 
@@ -950,6 +951,7 @@ async def main():
     await db.init_db()
     await ensure_julian_schema()
     await register_julian_commands()
+    await start_webapp_server()
     await dp.start_polling(bot)
 
 
