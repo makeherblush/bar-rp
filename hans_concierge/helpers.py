@@ -13,8 +13,8 @@ OWNER_ID = cfg.OWNER_ID
 GROUP_ID = cfg.GROUP_ID
 CH_INFO_ID = getattr(cfg, "CH_INFO_ID", 0)
 CH_PROMOTE_ID = getattr(cfg, "CH_PROMOTE_ID", 0)
-CH_INFO_LINK = getattr(cfg, "CH_INFO_LINK", "https://t.me/")
-CH_PROMOTE_LINK = getattr(cfg, "CH_PROMOTE_LINK", "https://t.me/")
+CH_INFO_LINK = getattr(cfg, "CH_INFO_LINK", "")
+CH_PROMOTE_LINK = getattr(cfg, "CH_PROMOTE_LINK", "")
 CHANNEL_ID = CH_INFO_ID
 
 REQUIRED_CN_SYMBOL = getattr(cfg, "REQUIRED_CN_SYMBOL", "🥂")
@@ -79,8 +79,32 @@ def styled_btn(
     return InlineKeyboardButton.model_construct(**data)
 
 
+def normalize_tg_link(link: str | None) -> str | None:
+    """Menormalisasi format @username, t.me/..., atau http:// menjadi https://t.me/... yang valid."""
+    if not link:
+        return None
+    cleaned = str(link).strip().strip('"').strip("'").strip()
+    if not cleaned:
+        return None
+
+    if cleaned.startswith("@"):
+        username = cleaned.lstrip("@")
+        return f"https://t.me/{username}" if username else None
+
+    if cleaned.startswith("http://"):
+        cleaned = "https://" + cleaned[len("http://"):]
+    elif cleaned.startswith("t.me/") or cleaned.startswith("telegram.me/"):
+        cleaned = "https://" + cleaned
+    elif not cleaned.startswith("https://"):
+        cleaned = f"https://t.me/{cleaned.lstrip('/')}"
+
+    if cleaned.rstrip("/") in ("https://t.me", "https://telegram.me"):
+        return None
+    return cleaned
+
+
 def _is_valid_tg_link(link: str | None) -> bool:
-    return bool(link and link.startswith("https://") and link.rstrip("/") != "https://t.me")
+    return normalize_tg_link(link) is not None
 
 
 async def ensure_hans_schema():
@@ -259,12 +283,14 @@ async def main_lobby_kb(user_id: int | None = None) -> InlineKeyboardMarkup:
         ],
     ]
 
-    # Baris pintasan URL menuju CH_INFO_LINK dan CH_PROMOTE_LINK
+    # Baris pintasan URL menuju CH_INFO_LINK dan CH_PROMOTE_LINK (otomatis dinormalisasi)
     channel_links_row = []
-    if _is_valid_tg_link(CH_INFO_LINK):
-        channel_links_row.append(styled_btn("📢 Channel Info", url=CH_INFO_LINK))
-    if _is_valid_tg_link(CH_PROMOTE_LINK):
-        channel_links_row.append(styled_btn("📣 Channel Promote", url=CH_PROMOTE_LINK))
+    norm_info_link = normalize_tg_link(CH_INFO_LINK)
+    norm_promote_link = normalize_tg_link(CH_PROMOTE_LINK)
+    if norm_info_link:
+        channel_links_row.append(styled_btn("📢 Channel Info", url=norm_info_link))
+    if norm_promote_link:
+        channel_links_row.append(styled_btn("📣 Channel Promote", url=norm_promote_link))
     if channel_links_row:
         rows.append(channel_links_row)
 
