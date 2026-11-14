@@ -219,12 +219,14 @@ async def ensure_julian_schema():
                 is_vip BOOLEAN DEFAULT FALSE,
                 vip_until TIMESTAMP WITHOUT TIME ZONE,
                 vip_booth_name TEXT,
+                vip_booth_thread_id BIGINT,
                 last_thread_id BIGINT,
                 is_admin BOOLEAN DEFAULT FALSE
             );
         """)
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS charm_points INTEGER DEFAULT 0;")
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS vip_booth_name TEXT;")
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS vip_booth_thread_id BIGINT;")
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_thread_id BIGINT;")
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS bar_settings (
@@ -656,10 +658,12 @@ async def cmd_order_drink(message: types.Message):
             coins = (row["coins"] or 0) if row else 0
 
             if coins < cost:
-                return await message.reply(
+                err_msg = await message.reply(
                     f"Saldo VC tidak cukup untuk memesan <b>{item_name}</b> (butuh <b>{cost} VC</b>, saldo kamu: <b>{coins} VC</b>).",
                     parse_mode=ParseMode.HTML,
                 )
+                await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+                return
 
             if cost > 0:
                 await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", cost, user.id)
@@ -731,10 +735,12 @@ async def cmd_eat_food(message: types.Message):
             coins = (row["coins"] or 0) if row else 0
 
             if coins < cost:
-                return await message.reply(
+                err_msg = await message.reply(
                     f"Saldo VC tidak cukup untuk memesan <b>{item_name}</b> (butuh <b>{cost} VC</b>).",
                     parse_mode=ParseMode.HTML,
                 )
+                await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+                return
 
             if cost > 0:
                 await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", cost, user.id)
@@ -781,10 +787,12 @@ async def cmd_treat_guest(message: types.Message):
     has_reply = bool(message.reply_to_message and message.reply_to_message.from_user)
 
     if len(parts) < 2 and not has_reply:
-        return await message.reply(
+        err_msg = await message.reply(
             "Format: <code>/treat @username [nama menu]</code> atau reply pesan temanmu dengan <code>/treat [nama menu]</code> (20 VC, +5 Charm).",
             parse_mode=ParseMode.HTML,
         )
+        await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+        return
 
     target_ident = None if has_reply else parts[1]
     if has_reply:
@@ -797,16 +805,22 @@ async def cmd_treat_guest(message: types.Message):
             await _sync_tg_user(conn, sender, message.message_thread_id)
             target = await _resolve_target_smart(conn, message, target_ident)
             if not target:
-                return await message.reply(
+                err_msg = await message.reply(
                     "Tamu tujuan belum tercatat. Reply langsung salah satu chat dia dengan <code>/treat</code>.",
                     parse_mode=ParseMode.HTML,
                 )
+                await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+                return
             if target["user_id"] == sender.id:
-                return await message.reply("Kamu tidak bisa mentraktir dirimu sendiri.")
+                err_msg = await message.reply("Kamu tidak bisa mentraktir dirimu sendiri.")
+                await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=15)
+                return
 
             s_row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", sender.id)
             if not s_row or (s_row["coins"] or 0) < 20:
-                return await message.reply("Saldo kamu kurang dari <b>20 VC</b> untuk mentraktir tamu.", parse_mode=ParseMode.HTML)
+                err_msg = await message.reply("Saldo kamu kurang dari <b>20 VC</b> untuk mentraktir tamu.", parse_mode=ParseMode.HTML)
+                await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+                return
 
             await conn.execute("UPDATE users SET coins = coins - 20 WHERE user_id = $1", sender.id)
             await conn.execute("UPDATE users SET charm_points = COALESCE(charm_points, 0) + 5 WHERE user_id = $1", target["user_id"])
@@ -820,28 +834,156 @@ async def cmd_treat_guest(message: types.Message):
     )
 
 
-# --- RESERVASI VIP BOOTH (/booth) ---
+# --- RESERVASI VIP BOOTH & AUTO-BUAT TOPIK (/booth & /closebooth) ---
 @dp.message(Command("booth"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_vip_booth(message: types.Message):
     user = message.from_user
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
-        return await message.reply("Format: <code>/booth Nama Booth Eksklusif</code> (Khusus pemegang VIP Pass)", parse_mode=ParseMode.HTML)
+        err_msg = await message.reply(
+            "Format: <code>/booth Nama Booth Eksklusif</code> (Khusus pemegang VIP Pass)",
+            parse_mode=ParseMode.HTML,
+        )
+        await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+        return
 
     booth_name = parts[1].strip()[:32]
+    topic_title = f"👑 {booth_name}"
+
     async with db.pool.acquire() as conn:
         await _sync_tg_user(conn, user, message.message_thread_id)
-        row = await conn.fetchrow("SELECT is_vip, vip_until FROM users WHERE user_id = $1", user.id)
+        row = await conn.fetchrow(
+            "SELECT is_vip, vip_until, vip_booth_thread_id FROM users WHERE user_id = $1",
+            user.id,
+        )
         is_vip = bool(row and row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
         if not is_vip:
-            return await message.reply("🔒 Reservasi Booth hanya tersedia untuk tamu dengan <b>VIP Reserve Pass</b>.", parse_mode=ParseMode.HTML)
-        await conn.execute("UPDATE users SET vip_booth_name = $1 WHERE user_id = $2", booth_name, user.id)
+            err_msg = await message.reply(
+                "🔒 Reservasi Booth hanya tersedia untuk tamu dengan <b>VIP Reserve Pass</b>.",
+                parse_mode=ParseMode.HTML,
+            )
+            await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+            return
+
+        existing_tid = row["vip_booth_thread_id"]
+        thread_id = None
+        is_renamed = False
+
+        # Coba ubah nama topik jika sudah punya booth aktif
+        if existing_tid:
+            try:
+                await bot.edit_forum_topic(
+                    chat_id=message.chat.id,
+                    message_thread_id=existing_tid,
+                    name=topic_title,
+                )
+                thread_id = existing_tid
+                is_renamed = True
+            except Exception:
+                thread_id = None
+
+        # Buat topik forum baru jika belum ada atau topik lama sudah dihapus
+        if not thread_id:
+            try:
+                topic = await bot.create_forum_topic(
+                    chat_id=message.chat.id,
+                    name=topic_title,
+                )
+                thread_id = topic.message_thread_id
+            except Exception as e:
+                err_msg = await message.reply(
+                    f"⚠️ Gagal membuat topik VIP Booth otomatis. Pastikan fitur <b>Topics</b> aktif di grup dan bot Julian memiliki izin Admin <b>Manage Topics</b>.\n<i>({html.escape(str(e))})</i>",
+                    parse_mode=ParseMode.HTML,
+                )
+                await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=25)
+                return
+
+        await conn.execute(
+            "UPDATE users SET vip_booth_name = $1, vip_booth_thread_id = $2, last_thread_id = $2 WHERE user_id = $3",
+            booth_name,
+            thread_id,
+            user.id,
+        )
 
     await react_msg(message.chat.id, message.message_id, "👑")
-    await message.reply(
-        f"🍾 Julian memasang papan nama emas <b>{html.escape(booth_name)}</b> di area balkon VIP untuk {_mention(user.id, user.first_name)}.",
+
+    # Kirim pesan sambutan RP langsung di dalam topik VIP Booth baru
+    try:
+        if is_renamed:
+            await bot.send_message(
+                chat_id=message.chat.id,
+                message_thread_id=thread_id,
+                text=(
+                    f"🍾 Julian mengganti papan nama emas di pintu booth menjadi <b>{html.escape(booth_name)}</b> "
+                    f"untuk {_mention(user.id, user.first_name)}."
+                ),
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await bot.send_message(
+                chat_id=message.chat.id,
+                message_thread_id=thread_id,
+                text=(
+                    f"🍾 <i>Julian membukakan tirai beludru merah dan menyalakan lampu kristal di balkon pribadi.</i>\n\n"
+                    f"Selamat datang di <b>{html.escape(booth_name)}</b>, {_mention(user.id, user.first_name)}. "
+                    f"Seluruh layanan meja privat Anda siap dinikmati di ruangan ini.\n"
+                    f"<i>(Ketik <code>/closebooth</code> kapan saja jika ingin menutup booth ini.)</i>"
+                ),
+                parse_mode=ParseMode.HTML,
+            )
+    except Exception:
+        pass
+
+    # Buat link langsung menuju topik baru jika chat supergroup memiliki ID -100...
+    chat_str = str(message.chat.id)
+    if chat_str.startswith("-100"):
+        topic_link = f"https://t.me/c/{chat_str[4:]}/{thread_id}"
+        link_text = f' (<a href="{topic_link}">Masuk ke Booth</a>)'
+    else:
+        link_text = ""
+
+    action_desc = "memperbarui papan nama" if is_renamed else "membuka topik ruangan pribadi"
+    conf_msg = await message.reply(
+        f"🍾 Julian {action_desc} <b>{html.escape(booth_name)}</b> untuk {_mention(user.id, user.first_name)}{link_text}.",
         parse_mode=ParseMode.HTML,
     )
+    await _schedule_delete(message.chat.id, [message.message_id, conf_msg.message_id], delay=45)
+
+
+@dp.message(Command("closebooth"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_close_vip_booth(message: types.Message):
+    user = message.from_user
+    async with db.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT vip_booth_name, vip_booth_thread_id FROM users WHERE user_id = $1",
+            user.id,
+        )
+        if not row or not row["vip_booth_thread_id"]:
+            err_msg = await message.reply("Kamu tidak memiliki topik VIP Booth yang sedang aktif.")
+            await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=15)
+            return
+
+        tid = row["vip_booth_thread_id"]
+        bname = row["vip_booth_name"] or "VIP Booth"
+        await conn.execute(
+            "UPDATE users SET vip_booth_name = NULL, vip_booth_thread_id = NULL WHERE user_id = $1",
+            user.id,
+        )
+
+    try:
+        await bot.delete_forum_topic(chat_id=message.chat.id, message_thread_id=tid)
+    except Exception:
+        try:
+            await bot.close_forum_topic(chat_id=message.chat.id, message_thread_id=tid)
+        except Exception:
+            pass
+
+    if message.message_thread_id != tid:
+        conf_msg = await message.reply(
+            f"🥂 Julian menutup tirai <b>{html.escape(bname)}</b> milik {_mention(user.id, user.first_name)}.",
+            parse_mode=ParseMode.HTML,
+        )
+        await _schedule_delete(message.chat.id, [message.message_id, conf_msg.message_id], delay=30)
 
 
 # --- MINI-GAME: MYSTERY BOX (/mystery) ---
@@ -854,7 +996,9 @@ async def cmd_mystery_box(message: types.Message):
             await _sync_tg_user(conn, user, message.message_thread_id)
             row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", user.id)
             if not row or (row["coins"] or 0) < cost:
-                return await message.reply("Butuh <b>40 VC</b> untuk membuka Velvet Mystery Box.", parse_mode=ParseMode.HTML)
+                err_msg = await message.reply("Butuh <b>40 VC</b> untuk membuka Velvet Mystery Box.", parse_mode=ParseMode.HTML)
+                await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+                return
 
             roll = random.randint(1, 100)
             if roll <= 35:
@@ -886,7 +1030,9 @@ async def cmd_slot_machine(message: types.Message):
     parts = (message.text or "").split()
     bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 15
     if not (10 <= bet <= 100):
-        return await message.reply("Taruhan mesin slot harus antara <b>10 hingga 100 VC</b>. Contoh: <code>/slot 20</code>", parse_mode=ParseMode.HTML)
+        err_msg = await message.reply("Taruhan mesin slot harus antara <b>10 hingga 100 VC</b>. Contoh: <code>/slot 20</code>", parse_mode=ParseMode.HTML)
+        await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+        return
 
     user = message.from_user
     async with db.pool.acquire() as conn:
@@ -894,7 +1040,9 @@ async def cmd_slot_machine(message: types.Message):
             await _sync_tg_user(conn, user, message.message_thread_id)
             row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", user.id)
             if not row or (row["coins"] or 0) < bet:
-                return await message.reply(f"Saldo kamu kurang dari <b>{bet} VC</b> untuk memutar mesin slot.", parse_mode=ParseMode.HTML)
+                err_msg = await message.reply(f"Saldo kamu kurang dari <b>{bet} VC</b> untuk memutar mesin slot.", parse_mode=ParseMode.HTML)
+                await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+                return
             await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", bet, user.id)
 
     dice_msg = await message.reply_dice(emoji="🎰")
@@ -931,7 +1079,9 @@ async def cmd_dart_challenge(message: types.Message):
     has_reply = bool(message.reply_to_message and message.reply_to_message.from_user)
 
     if len(parts) < 2 and not has_reply:
-        return await message.reply("Format: <code>/dart @username [taruhan 10-100]</code> atau reply pesan lawanmu.", parse_mode=ParseMode.HTML)
+        err_msg = await message.reply("Format: <code>/dart @username [taruhan 10-100]</code> atau reply pesan lawanmu.", parse_mode=ParseMode.HTML)
+        await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+        return
 
     if has_reply:
         bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 20
@@ -941,22 +1091,28 @@ async def cmd_dart_challenge(message: types.Message):
         target_ident = parts[1]
 
     if not (10 <= bet <= 100):
-        return await message.reply("Taruhan dart harus antara <b>10 hingga 100 VC</b>.", parse_mode=ParseMode.HTML)
+        err_msg = await message.reply("Taruhan dart harus antara <b>10 hingga 100 VC</b>.", parse_mode=ParseMode.HTML)
+        await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+        return
 
     challenger = message.from_user
     async with db.pool.acquire() as conn:
         await _sync_tg_user(conn, challenger, message.message_thread_id)
         target = await _resolve_target_smart(conn, message, target_ident)
         if not target or target["user_id"] == challenger.id:
-            return await message.reply(
+            err_msg = await message.reply(
                 "Lawan dart tidak ditemukan. Reply langsung pesan lawanmu dengan <code>/dart 20</code>.",
                 parse_mode=ParseMode.HTML,
             )
+            await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+            return
 
         c_coins = await conn.fetchval("SELECT coins FROM users WHERE user_id = $1", challenger.id) or 0
         t_coins = target["coins"] or 0
         if c_coins < bet or t_coins < bet:
-            return await message.reply("Saldo salah satu pemain tidak mencukupi.")
+            err_msg = await message.reply("Saldo salah satu pemain tidak mencukupi.")
+            await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+            return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         styled_btn(f"🎯 Lempar Dart ({bet} VC)", callback_data=f"playdart_{challenger.id}_{target['user_id']}_{bet}", style="success"),
@@ -1035,7 +1191,9 @@ async def cmd_dice_duel(message: types.Message):
     has_reply = bool(message.reply_to_message and message.reply_to_message.from_user)
 
     if len(parts) < 2 and not has_reply:
-        return await message.reply("Format: <code>/dice @username [taruhan 10-100]</code> atau reply pesan lawanmu.", parse_mode=ParseMode.HTML)
+        err_msg = await message.reply("Format: <code>/dice @username [taruhan 10-100]</code> atau reply pesan lawanmu.", parse_mode=ParseMode.HTML)
+        await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+        return
 
     if has_reply:
         bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 20
@@ -1045,22 +1203,28 @@ async def cmd_dice_duel(message: types.Message):
         target_ident = parts[1]
 
     if not (10 <= bet <= 100):
-        return await message.reply("Taruhan duel dadu harus antara <b>10 hingga 100 VC</b>.", parse_mode=ParseMode.HTML)
+        err_msg = await message.reply("Taruhan duel dadu harus antara <b>10 hingga 100 VC</b>.", parse_mode=ParseMode.HTML)
+        await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+        return
 
     challenger = message.from_user
     async with db.pool.acquire() as conn:
         await _sync_tg_user(conn, challenger, message.message_thread_id)
         target = await _resolve_target_smart(conn, message, target_ident)
         if not target or target["user_id"] == challenger.id:
-            return await message.reply(
+            err_msg = await message.reply(
                 "Lawan duel tidak ditemukan. Reply langsung pesan lawanmu dengan <code>/dice 20</code>.",
                 parse_mode=ParseMode.HTML,
             )
+            await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+            return
 
         c_coins = await conn.fetchval("SELECT coins FROM users WHERE user_id = $1", challenger.id) or 0
         t_coins = target["coins"] or 0
         if c_coins < bet or t_coins < bet:
-            return await message.reply("Saldo VC salah satu pemain tidak mencukupi.")
+            err_msg = await message.reply("Saldo VC salah satu pemain tidak mencukupi.")
+            await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+            return
 
         duel_id = await conn.fetchval("""
             INSERT INTO duel_challenges (challenger_id, target_id, bet_vc)
@@ -1158,7 +1322,9 @@ async def cmd_check_bill(message: types.Message):
         )
 
     if not row:
-        return await message.reply("Kirim 1 pesan di grup terlebih dahulu untuk membuka tab tamu.")
+        err_msg = await message.reply("Kirim 1 pesan di grup terlebih dahulu untuk membuka tab tamu.")
+        await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=15)
+        return
 
     is_vip = bool(row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
     status = f"👑 VIP (s/d {row['vip_until'].strftime('%d %b %H:%M UTC')})" if is_vip else "Reguler"
@@ -1193,10 +1359,12 @@ async def cmd_top_charm(message: types.Message):
 async def cmd_apply_shift(message: types.Message):
     parts = (message.text or "").split()
     if len(parts) < 2 or parts[1].lower() not in SHIFT_ROLES:
-        return await message.reply(
+        err_msg = await message.reply(
             "💼 Pilih shift (20 menit — upah 50 VC): <code>/apply waiter</code>, <code>/apply bartender</code>, atau <code>/apply host</code>",
             parse_mode=ParseMode.HTML,
         )
+        await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+        return
 
     role_key = parts[1].lower()
     meta = SHIFT_ROLES[role_key]
@@ -1210,18 +1378,24 @@ async def cmd_apply_shift(message: types.Message):
             await conn.execute("DELETE FROM active_shifts WHERE ends_at <= $1", now)
             existing = await conn.fetchrow("SELECT role_name FROM active_shifts WHERE user_id = $1", user.id)
             if existing:
-                return await message.reply(f"Kamu sedang menjalani shift sebagai <b>{existing['role_name']}</b>.", parse_mode=ParseMode.HTML)
+                err_msg = await message.reply(f"Kamu sedang menjalani shift sebagai <b>{existing['role_name']}</b>.", parse_mode=ParseMode.HTML)
+                await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=15)
+                return
 
             active_count = await conn.fetchval("SELECT COUNT(*) FROM active_shifts WHERE role_name = $1", role_key) or 0
             if active_count >= meta["quota"]:
-                return await message.reply(f"Kuota shift <b>{meta['title']}</b> sedang penuh ({meta['quota']}/{meta['quota']}).", parse_mode=ParseMode.HTML)
+                err_msg = await message.reply(f"Kuota shift <b>{meta['title']}</b> sedang penuh ({meta['quota']}/{meta['quota']}).", parse_mode=ParseMode.HTML)
+                await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=15)
+                return
 
             daily_cnt = await conn.fetchval(
                 "SELECT count FROM shift_daily_counts WHERE user_id = $1 AND shift_date = $2",
                 user.id, today
             ) or 0
             if daily_cnt >= 3:
-                return await message.reply("Kamu sudah mencapai batas maksimal <b>3x shift</b> hari ini.", parse_mode=ParseMode.HTML)
+                err_msg = await message.reply("Kamu sudah mencapai batas maksimal <b>3x shift</b> hari ini.", parse_mode=ParseMode.HTML)
+                await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=15)
+                return
 
             ends_at = now + timedelta(minutes=20)
             await conn.execute("""
@@ -1242,7 +1416,9 @@ async def _record_shift_service(message: types.Message, allowed_role: str, actio
     async with db.pool.acquire() as conn:
         shift = await conn.fetchrow("SELECT * FROM active_shifts WHERE user_id = $1", user.id)
         if not shift or shift["role_name"] != allowed_role:
-            return await message.reply(f"Perintah ini khusus staf yang sedang shift <b>{allowed_role}</b>.", parse_mode=ParseMode.HTML)
+            err_msg = await message.reply(f"Perintah ini khusus staf yang sedang shift <b>{allowed_role}</b>.", parse_mode=ParseMode.HTML)
+            await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=15)
+            return
         new_cnt = (shift["service_count"] or 0) + 1
         await conn.execute("UPDATE active_shifts SET service_count = $1 WHERE user_id = $2", new_cnt, user.id)
 
@@ -1290,12 +1466,15 @@ async def cmd_my_shift(message: types.Message):
     async with db.pool.acquire() as conn:
         shift = await conn.fetchrow("SELECT * FROM active_shifts WHERE user_id = $1", user.id)
     if not shift:
-        return await message.reply("Kamu sedang tidak dalam jadwal shift aktif.")
+        err_msg = await message.reply("Kamu sedang tidak dalam jadwal shift aktif.")
+        await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=15)
+        return
     rem = max(0, int((shift["ends_at"] - datetime.utcnow()).total_seconds() // 60))
-    await message.reply(
+    msg = await message.reply(
         f"📋 Shift <b>{shift['role_name'].upper()}</b> — Layanan: <b>{shift['service_count']}/5</b> (sisa ~{rem} menit)",
         parse_mode=ParseMode.HTML,
     )
+    await _schedule_delete(message.chat.id, [message.message_id, msg.message_id], delay=30)
 
 
 @dp.message(Command("endshift"), F.chat.type.in_({"group", "supergroup"}))
@@ -1306,14 +1485,18 @@ async def cmd_end_shift(message: types.Message):
         async with conn.transaction():
             shift = await conn.fetchrow("SELECT * FROM active_shifts WHERE user_id = $1 FOR UPDATE", user.id)
             if not shift:
-                return await message.reply("Tidak ada shift aktif yang perlu diselesaikan.")
+                err_msg = await message.reply("Tidak ada shift aktif yang perlu diselesaikan.")
+                await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=15)
+                return
             await conn.execute("DELETE FROM active_shifts WHERE user_id = $1", user.id)
 
             if (shift["service_count"] or 0) < 5:
-                return await message.reply(
+                err_msg = await message.reply(
                     f"Shift diakhiri lebih awal dengan layanan <b>{shift['service_count']}/5</b> (belum memenuhi syarat upah 50 VC).",
                     parse_mode=ParseMode.HTML,
                 )
+                await _schedule_delete(message.chat.id, [message.message_id, err_msg.message_id], delay=20)
+                return
 
             await conn.execute("UPDATE users SET coins = coins + 50 WHERE user_id = $1", user.id)
             await conn.execute("""
@@ -1364,7 +1547,8 @@ async def register_julian_commands():
         BotCommand(command="order", description="Pesan minuman (atau buka menu)"),
         BotCommand(command="eat", description="Pesan hidangan dapur (atau buka menu)"),
         BotCommand(command="treat", description="Traktir tamu lain (+5 Charm untuk penerima)"),
-        BotCommand(command="booth", description="[VIP] Reservasi meja booth eksklusif"),
+        BotCommand(command="booth", description="[VIP] Buka topik VIP Booth eksklusif"),
+        BotCommand(command="closebooth", description="[VIP] Tutup topik VIP Booth aktif"),
         BotCommand(command="slot", description="Putar mesin slot bar (10-100 VC)"),
         BotCommand(command="dart", description="Duel lempar dart 1v1 berhadiah VC"),
         BotCommand(command="dice", description="Duel dadu 1v1 berhadiah VC"),
