@@ -5,15 +5,16 @@ from aiogram import Router, F, types
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
+from aiogram.types import InlineKeyboardMarkup, BufferedInputFile
 from aiogram.enums import ParseMode
 
 import shared.database as db
 from hans_concierge.helpers import (
-    bot, OWNER_ID, GROUP_ID, REQUIRED_CN_SYMBOL, VIP_COST_24H, DAILY_REWARD_VC,
-    REFERRAL_BONUS_VC, DAILY_QUESTS, get_bar_setting, react_message, styled_btn,
-    get_or_create_referral_code, log_wallet_tx, add_quest_progress,
-    insufficient_vc_kb, main_lobby_kb, info_categories_kb, back_info_kb
+    bot, OWNER_ID, GROUP_ID, REQUIRED_CN_SYMBOL, WELCOME_BONUS, VIP_COST_24H,
+    DAILY_REWARD_VC, REFERRAL_BONUS_VC, DAILY_QUESTS, get_bar_setting,
+    react_message, styled_btn, get_or_create_referral_code, log_wallet_tx,
+    add_quest_progress, insufficient_vc_kb, main_lobby_kb,
+    info_categories_kb, back_info_kb
 )
 from hans_concierge.card_gen import (
     generate_member_card, EFFECT_CONFETTI, EFFECT_FIRE
@@ -60,7 +61,7 @@ async def _send_or_edit_lobby(
     return await target.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb, message_effect_id=effect_id)
 
 
-# --- GERBANG UTAMA (/start + KODE REFERRAL + CUSTOM WELCOME ICON) ---
+# --- GERBANG UTAMA /start + KODE REFERRAL + CUSTOM WELCOME ICON ---
 @router.message(CommandStart(), F.chat.type == "private")
 async def cmd_start_hans(message: types.Message, state: FSMContext):
     await state.clear()
@@ -88,10 +89,10 @@ async def cmd_start_hans(message: types.Message, state: FSMContext):
 
             await conn.execute("""
                 INSERT INTO users (user_id, username, full_name, coins, referred_by)
-                VALUES ($1, $2, $3, 50, $4)
-            """, user.id, user.username or "NoUsername", user.full_name, referrer_id)
-            await log_wallet_tx(conn, user.id, 50, "Bonus tamu baru pertama kali hadir")
-            cur_coins = 50
+                VALUES ($1, $2, $3, $4, $5)
+            """, user.id, user.username or "NoUsername", user.full_name, WELCOME_BONUS, referrer_id)
+            await log_wallet_tx(conn, user.id, WELCOME_BONUS, "Bonus tamu baru pertama kali hadir")
+            cur_coins = WELCOME_BONUS
         else:
             await conn.execute(
                 "UPDATE users SET username = $1, full_name = $2 WHERE user_id = $3",
@@ -102,9 +103,9 @@ async def cmd_start_hans(message: types.Message, state: FSMContext):
     await get_or_create_referral_code(user.id)
     has_cn = REQUIRED_CN_SYMBOL in (user.full_name or "")
     cn_badge = (
-        f"✅ Terpasang (<code>{html.escape(user.full_name)}</code>)"
+        f"✅ Terpasang — <code>{html.escape(user.full_name)}</code>"
         if has_cn
-        else f"⚠️ Belum terpasang (Wajib simbol <b>{REQUIRED_CN_SYMBOL}</b>)"
+        else f"⚠️ Belum terpasang — Wajib simbol <b>{REQUIRED_CN_SYMBOL}</b>"
     )
 
     welcome_ico = await get_bar_setting("welcome_emoji")
@@ -115,7 +116,7 @@ async def cmd_start_hans(message: types.Message, state: FSMContext):
         f"<b>\"Selamat malam, {html.escape(user.first_name)}. Saya Hans, Kepala Concierge di <i>The Velvet Hour</i>.\"</b>\n\n"
         f"• <b>Status CN:</b> {cn_badge}\n"
         f"• <b>Saldo Dompet:</b> <b>{cur_coins} VC</b>\n\n"
-        "<i>Gunakan panel resepsionis di bawah ini untuk masuk ke ruangan, mengirim curhat/PM ke channel, memeriksa kartu member & mutasi dompet, atau mengundang teman:</i>"
+        "<i>Gunakan panel resepsionis di bawah ini untuk masuk ke ruangan, mengirim confess atau promote ke channel, memeriksa kartu member & mutasi dompet, atau mengundang teman:</i>"
     )
     await message.answer(
         text,
@@ -145,7 +146,7 @@ async def cb_back_lobby(call: types.CallbackQuery, state: FSMContext):
     await _send_or_edit_lobby(call, text, await main_lobby_kb(user.id))
 
 
-# --- VERIFIKASI MASUK BAR (+ CEK CN DETAIL & PASSWORD PINTU) ---
+# --- VERIFIKASI MASUK BAR + CEK CN DETAIL & PASSWORD PINTU ---
 async def _grant_bar_entry(user: types.User, target_msg: types.Message, edit: bool = True):
     ref_bonus_note = ""
     has_ref_bonus = False
@@ -166,7 +167,7 @@ async def _grant_bar_entry(user: types.User, target_msg: types.Message, edit: bo
                     "UPDATE users SET coins = coins + $1, referral_count = referral_count + 1 WHERE user_id = $2",
                     REFERRAL_BONUS_VC, ref_id
                 )
-                await log_wallet_tx(conn, user.id, REFERRAL_BONUS_VC, "Bonus undangan teman (Referral)")
+                await log_wallet_tx(conn, user.id, REFERRAL_BONUS_VC, "Bonus undangan teman Referral")
                 await log_wallet_tx(conn, ref_id, REFERRAL_BONUS_VC, f"Bonus mengundang {user.first_name}")
                 ref_bonus_note = (
                     f"\n🎉 <b>Bonus Referral Aktif:</b> Kamu dan pengundangmu masing-masing mendapat "
@@ -184,7 +185,7 @@ async def _grant_bar_entry(user: types.User, target_msg: types.Message, edit: bo
             [styled_btn("⬅️ Kembali ke Lobi", callback_data="back_lobby")]
         ])
         out = (
-            f"✅ <b>VERIFIKASI ATRIBUT ({REQUIRED_CN_SYMBOL}) BERHASIL</b>\n"
+            f"✅ <b>VERIFIKASI ATRIBUT {REQUIRED_CN_SYMBOL} BERHASIL</b>\n"
             f"{ref_bonus_note}\n"
             "<i>Hans membukakan pintu kayu mahoni dan mempersilakanmu masuk. Tautan pintu sekali pakai di bawah ini berlaku selama 10 menit:</i>"
         )
@@ -206,7 +207,7 @@ async def _grant_bar_entry(user: types.User, target_msg: types.Message, edit: bo
         err_out = (
             f"⚠️ <b>Gagal membuat tautan masuk otomatis</b>\n"
             f"Detail teknis: <code>{html.escape(str(e))}</code>\n"
-            f"<i>Pastikan Hans memiliki izin 'Invite Users via Link' di grup utama, atau hubungi Owner.</i>"
+            f"<i>Pastikan Hans memiliki izin Invite Users via Link di grup utama, atau hubungi Owner.</i>"
         )
         if edit:
             await target_msg.edit_text(err_out, parse_mode=ParseMode.HTML, reply_markup=await main_lobby_kb(user.id))
@@ -232,8 +233,8 @@ async def cb_enter_bar(call: types.CallbackQuery, state: FSMContext):
             f"• <b>Simbol wajib bar:</b> <b>{REQUIRED_CN_SYMBOL}</b>\n\n"
             f"<b>Cara memasang:</b>\n"
             f"1. Buka <i>Settings / Pengaturan Telegram</i> → <i>Edit Name</i>.\n"
-            f"2. Tambahkan simbol <b>{REQUIRED_CN_SYMBOL}</b> pada nama depan atau belakangmu "
-            f"(contoh: <code>{html.escape(user.first_name)} {REQUIRED_CN_SYMBOL}</code>).\n"
+            f"2. Tambahkan simbol <b>{REQUIRED_CN_SYMBOL}</b> pada nama depan atau belakangmu — "
+            f"contoh: <code>{html.escape(user.first_name)} {REQUIRED_CN_SYMBOL}</code>.\n"
             f"3. Tekan tombol <b>Cek Ulang</b> di bawah ini.",
             kb,
         )
@@ -248,7 +249,7 @@ async def cb_enter_bar(call: types.CallbackQuery, state: FSMContext):
         return await _send_or_edit_lobby(
             call,
             "🔐 <b>KATA SANDI PINTU LOUNGE DIPERLUKAN</b>\n\n"
-            f"✅ Atribut CN (<code>{html.escape(current_name)}</code>) terverifikasi.\n"
+            f"✅ Atribut CN <code>{html.escape(current_name)}</code> terverifikasi.\n"
             "<i>Namun malam ini pintu ruang lounge dikunci dengan kata sandi khusus. Silakan ketik kata sandi masuk sekarang:</i>",
             kb,
         )
@@ -276,13 +277,13 @@ async def fsm_check_door_password(message: types.Message, state: FSMContext):
     ])
     await message.answer(
         "❌ <b>Kata sandi tidak cocok!</b>\n"
-        "<i>Periksa kembali huruf besar/kecil kata sandi yang diberikan Owner, lalu ketik ulang (atau tekan Batal):</i>",
+        "<i>Periksa kembali huruf besar/kecil kata sandi yang diberikan Owner, lalu ketik ulang atau tekan Batal:</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=kb
     )
 
 
-# --- DOMPET & KARTU MEMBER VISUAL (AUTO NAMA, USN & PP TELEGRAM) ---
+# --- DOMPET & KARTU MEMBER VISUAL ---
 @router.callback_query(F.data == "my_wallet")
 async def cb_my_wallet(call: types.CallbackQuery):
     await call.answer("Mencetak kartu keanggotaan...")
@@ -329,7 +330,7 @@ async def cb_my_wallet(call: types.CallbackQuery):
             sign = f"+{t['amount']}" if t["amount"] > 0 else f"{t['amount']}"
             icon = "🟢" if t["amount"] > 0 else "🔴"
             tgl = t["created_at"].strftime("%d/%m %H:%M")
-            tx_lines.append(f"{icon} <b>{sign} VC</b> — {html.escape(t['reason'])} <i>({tgl})</i>")
+            tx_lines.append(f"{icon} <b>{sign} VC</b> — {html.escape(t['reason'])} • <i>{tgl}</i>")
         mutasi_block = f"<blockquote expandable>{chr(10).join(tx_lines)}</blockquote>"
     else:
         mutasi_block = "<i>Belum ada catatan transaksi terbaru.</i>"
@@ -352,7 +353,7 @@ async def cb_my_wallet(call: types.CallbackQuery):
     )
 
 
-# --- ABSEN HARIAN (/daily & TOMBOL + REACTION + EFEK API) ---
+# --- ABSEN HARIAN /daily ---
 async def _process_daily_claim(user_id: int, full_name: str) -> tuple[str, bool]:
     today = datetime.utcnow().date()
     async with db.pool.acquire() as conn:
@@ -362,7 +363,7 @@ async def _process_daily_claim(user_id: int, full_name: str) -> tuple[str, bool]
                 return (
                     f"⏳ <b>Jatah Absen Hari Ini Sudah Diambil</b>\n\n"
                     f"Saldo kamu saat ini: <b>{row['coins'] or 0} VC</b>.\n"
-                    f"<i>Kembali lagi besok (reset pukul 00:00 UTC) atau selesaikan Misi Harian untuk bonus VC tambahan!</i>",
+                    f"<i>Kembali lagi besok — reset pukul 00:00 UTC — atau selesaikan Misi Harian untuk bonus VC tambahan!</i>",
                     False,
                 )
             new_bal = (row["coins"] if row else 0) + DAILY_REWARD_VC
@@ -370,7 +371,7 @@ async def _process_daily_claim(user_id: int, full_name: str) -> tuple[str, bool]
                 "UPDATE users SET coins = $1, last_daily = $2 WHERE user_id = $3",
                 new_bal, today, user_id
             )
-            await log_wallet_tx(conn, user_id, DAILY_REWARD_VC, "Absen harian (/daily)")
+            await log_wallet_tx(conn, user_id, DAILY_REWARD_VC, "Absen harian /daily")
     await add_quest_progress(user_id, "daily_checkin", 1)
     return (
         f"📅 <b>ABSEN HARIAN BERHASIL!</b>\n\n"
@@ -429,10 +430,10 @@ async def cb_daily_quests(call: types.CallbackQuery):
         if claimed:
             status = "✅ <i>Sudah diklaim</i>"
         elif cur >= target:
-            status = f"🎁 <b>Siap Klaim (+{meta['reward']} VC)!</b>"
-            buttons.append([styled_btn(f"🎁 Klaim {meta['title']} (+{meta['reward']} VC)", callback_data=f"claimq_{q_key}", style="success")])
+            status = f"🎁 <b>Siap Klaim +{meta['reward']} VC!</b>"
+            buttons.append([styled_btn(f"🎁 Klaim {meta['title']} +{meta['reward']} VC", callback_data=f"claimq_{q_key}", style="success")])
         else:
-            status = f"⏳ Progres: <b>{cur}/{target}</b> (Hadiah: +{meta['reward']} VC)"
+            status = f"⏳ Progres: <b>{cur}/{target}</b> — Hadiah +{meta['reward']} VC"
 
         lines.append(f"• <b>{meta['title']}</b>\n  {meta['desc']}\n  {status}")
 
@@ -491,18 +492,18 @@ async def cb_my_referral(call: types.CallbackQuery):
         total_invited = await conn.fetchval("SELECT referral_count FROM users WHERE user_id = $1", user_id) or 0
 
     text = (
-        "🎟️ <b>PROGRAM UNDANGAN TAMU (REFERRAL)</b>\n\n"
+        "🎟️ <b>PROGRAM UNDANGAN TAMU — REFERRAL</b>\n\n"
         f"Bagikan tautan undangan eksklusif milikmu kepada teman RP. "
-        f"Saat temanmu mendaftar lewat tautan ini dan lolos verifikasi pintu masuk ({REQUIRED_CN_SYMBOL}), "
+        f"Saat temanmu mendaftar lewat tautan ini dan lolos verifikasi pintu masuk simbol {REQUIRED_CN_SYMBOL}, "
         f"kalian berdua langsung memperoleh <b>+{REFERRAL_BONUS_VC} Velvet Coins</b>!\n\n"
         f"• <b>Kode Undanganmu:</b> <code>{code}</code>\n"
         f"• <b>Total Teman Berhasil Diundang:</b> {total_invited} orang\n"
-        f"• <b>Tautan Undanganmu (klik untuk salin):</b>\n<code>{ref_link}</code>"
+        f"• <b>Tautan Undanganmu — klik untuk salin:</b>\n<code>{ref_link}</code>"
     )
     await _send_or_edit_lobby(call, text, await main_lobby_kb(user_id))
 
 
-# --- BELI VIP PASS (24 JAM + EFEK KONFETI LAYAR PENUH) ---
+# --- BELI VIP PASS 24 JAM ---
 @router.callback_query(F.data == "buy_vip")
 async def cb_buy_vip(call: types.CallbackQuery):
     user_id = call.from_user.id
@@ -516,8 +517,8 @@ async def cb_buy_vip(call: types.CallbackQuery):
                 return await _send_or_edit_lobby(
                     call,
                     f"💸 <b>SALDO VELVET COINS BELUM MENCUKUPI</b>\n\n"
-                    f"• <b>Harga VIP Pass (24 Jam):</b> {VIP_COST_24H} VC\n"
-                    f"• <b>Saldo kamu saat ini:</b> {coins} VC (Kurang <b>{kurang} VC</b>)\n\n"
+                    f"• <b>Harga VIP Pass 24 Jam:</b> {VIP_COST_24H} VC\n"
+                    f"• <b>Saldo kamu saat ini:</b> {coins} VC — Kurang <b>{kurang} VC</b>\n\n"
                     f"<i>Kumpulkan VC gratis dari Absen Harian, Misi Harian, atau chat RP di grup utama:</i>",
                     insufficient_vc_kb(coins, VIP_COST_24H),
                 )
@@ -530,7 +531,7 @@ async def cb_buy_vip(call: types.CallbackQuery):
                 "UPDATE users SET coins = coins - $1, is_vip = TRUE, vip_until = $2 WHERE user_id = $3",
                 VIP_COST_24H, new_until, user_id
             )
-            await log_wallet_tx(conn, user_id, -VIP_COST_24H, "Aktivasi VIP Reserve Pass (24 Jam)")
+            await log_wallet_tx(conn, user_id, -VIP_COST_24H, "Aktivasi VIP Reserve Pass 24 Jam")
 
     await call.answer("VIP Pass aktif selama 24 jam!", show_alert=True)
     vip_text = (
@@ -538,11 +539,11 @@ async def cb_buy_vip(call: types.CallbackQuery):
         f"• <b>Berlaku hingga:</b> {new_until.strftime('%d %b %Y %H:%M UTC')}\n"
         f"• <b>Sisa Saldo:</b> {coins - VIP_COST_24H} VC\n\n"
         f"• <b>Keuntungan VIP:</b>\n"
-        f"  1. Gratis request lagu di grup (<code>/reqsong</code>)\n"
-        f"  2. Gratis menu makanan & minuman eksklusif VIP (<code>/order</code> & <code>/eat</code>)\n"
-        f"  3. Gratis kirim Curhat (#confess) & PM (#pm) ke Channel\n"
-        f"  4. Reservasi meja eksklusif (<code>/booth Nama Booth</code>)\n"
-        f"  5. Batas anti-idle 2x lebih lama (120 menit)"
+        f"  1. Gratis request lagu di grup lewat <code>/reqsong</code>\n"
+        f"  2. Gratis menu makanan & minuman eksklusif VIP lewat <code>/order</code> & <code>/eat</code>\n"
+        f"  3. Gratis kirim Curhat Confess & Promote ke Channel\n"
+        f"  4. Reservasi meja eksklusif lewat <code>/booth Nama Booth</code>\n"
+        f"  5. Batas anti-idle 2x lebih lama yaitu 120 menit"
     )
     await _send_or_edit_lobby(call, vip_text, await main_lobby_kb(user_id), effect_id=EFFECT_CONFETTI)
 
@@ -563,18 +564,18 @@ async def cb_info_menu(call: types.CallbackQuery):
 async def cb_info_cmd_bar(call: types.CallbackQuery):
     await call.answer()
     text = (
-        "🥂 <b>COMMAND BAR, MENU VIP, BOOTH & MINI-GAME (JULIAN)</b>\n\n"
+        "🥂 <b>COMMAND BAR, MENU VIP, BOOTH & MINI-GAME — JULIAN</b>\n\n"
         "<blockquote expandable>"
-        "• <code>/order [nama minuman]</code> — Lihat & pesan minuman:\n"
-        "  - <b>Reguler (Gratis):</b> <code>espresso</code>, <code>latte</code>, <code>negroni</code>, <code>whisky</code>, <code>mojito</code>, <code>mocktail</code>, <code>tea</code>, <code>water</code>, atau custom bebas.\n"
-        "  - <b>Eksklusif VIP (Gratis VIP / 15 VC):</b> <code>vip_dom</code>, <code>vip_blue</code>, <code>vip_absinthe</code>, <code>vip_royal</code>.\n\n"
-        "• <code>/eat [nama makanan]</code> — Lihat & pesan hidangan dapur:\n"
-        "  - <b>Reguler (Gratis):</b> <code>fries</code>, <code>steak</code>, <code>pasta</code>, <code>croissant</code>, <code>platter</code>, <code>cake</code>, <code>tiramisu</code>, atau custom bebas.\n"
-        "  - <b>Eksklusif VIP (Gratis VIP / 15 VC):</b> <code>vip_caviar</code>, <code>vip_lobster</code>, <code>vip_a5</code>, <code>vip_gold</code>.\n\n"
-        "• <code>/treat @username [menu]</code> — Traktir tamu lain (<b>20 VC</b>, penerima dapat <b>+5 Charm</b>).\n"
-        "• <code>/booth [Nama Booth]</code> <i>(Khusus VIP)</i> — Reservasi meja VIP eksklusif.\n"
-        "• <code>/dice @username [taruhan 10-100 VC]</code> — Duel dadu 1v1 berhadiah VC.\n"
-        "• <code>/mystery</code> (40 VC), <code>/toast @user</code>, <code>/bill</code>, <code>/guests</code>, <code>/topcharm</code>, <code>/lapak</code>."
+        "• <code>/order nama minuman</code> — Lihat & pesan minuman:\n"
+        "  - <b>Reguler Gratis:</b> <code>espresso</code>, <code>latte</code>, <code>negroni</code>, <code>whisky</code>, <code>mojito</code>, <code>mocktail</code>, <code>tea</code>, <code>water</code>, atau custom bebas.\n"
+        "  - <b>Eksklusif VIP — Gratis VIP / 15 VC:</b> <code>vip_dom</code>, <code>vip_blue</code>, <code>vip_absinthe</code>, <code>vip_royal</code>.\n\n"
+        "• <code>/eat nama makanan</code> — Lihat & pesan hidangan dapur:\n"
+        "  - <b>Reguler Gratis:</b> <code>fries</code>, <code>steak</code>, <code>pasta</code>, <code>croissant</code>, <code>platter</code>, <code>cake</code>, <code>tiramisu</code>, atau custom bebas.\n"
+        "  - <b>Eksklusif VIP — Gratis VIP / 15 VC:</b> <code>vip_caviar</code>, <code>vip_lobster</code>, <code>vip_a5</code>, <code>vip_gold</code>.\n\n"
+        "• <code>/treat @username menu</code> — Traktir tamu lain <b>20 VC</b>, penerima dapat <b>+5 Charm</b>.\n"
+        "• <code>/booth Nama Booth</code> — Khusus VIP untuk reservasi meja VIP eksklusif.\n"
+        "• <code>/dice @username taruhan 10-100 VC</code> — Duel dadu 1v1 berhadiah VC.\n"
+        "• <code>/mystery</code> 40 VC, <code>/toast @user</code>, <code>/bill</code>, <code>/guests</code>, <code>/topcharm</code>, <code>/lapak</code>."
         "</blockquote>"
     )
     await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=back_info_kb())
@@ -584,15 +585,15 @@ async def cb_info_cmd_bar(call: types.CallbackQuery):
 async def cb_info_cmd_music(call: types.CallbackQuery):
     await call.answer()
     text = (
-        "🎶 <b>COMMAND MUSIK & JUKEBOX LOUNGE (KAELEN DJ)</b>\n\n"
+        "🎶 <b>COMMAND MUSIK & JUKEBOX LOUNGE — KAELEN DJ</b>\n\n"
         "• <code>/reqsong Judul Lagu - Nama Penyanyi</code>\n"
-        "  Memutar lagu di Obrolan Suara grup (<b>10 VC</b>, gratis untuk VIP & DJ).\n"
+        "  Memutar lagu di Obrolan Suara grup — gratis untuk VIP & DJ.\n"
         "  Contoh: <code>/reqsong Apocalypse - Cigarettes After Sex</code>\n\n"
         "• <code>/nowplaying</code> — Melihat detail lagu yang sedang diputar beserta durasinya.\n"
         "• <code>/queue</code> — Melihat daftar antrean lagu jukebox berikutnya.\n"
-        "• <code>/voteskip</code> — Voting bersama tamu lain (butuh <b>3 suara</b>) untuk melewati lagu.\n\n"
+        "• <code>/voteskip</code> — Voting bersama tamu lain — butuh <b>3 suara</b> — untuk melewati lagu.\n\n"
         "• <code>/myearphone Judul Lagu - Nama Penyanyi</code>\n"
-        "  Mengirim file MP3 lagu langsung ke Private Chat kamu (Gratis)."
+        "  Mengirim file MP3 lagu langsung ke Private Chat kamu secara gratis."
     )
     await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=back_info_kb())
 
@@ -601,12 +602,12 @@ async def cb_info_cmd_music(call: types.CallbackQuery):
 async def cb_info_cmd_shift(call: types.CallbackQuery):
     await call.answer()
     text = (
-        "💼 <b>SISTEM SHIFT KERJA (20 MENIT — UPAH 50 VC)</b>\n"
-        "<i>Maksimal 3x shift/hari per tamu. Selesaikan minimal 5x layanan selama shift berlangsung:</i>\n\n"
-        "• <code>/apply waiter</code> (Kuota 4) — Tugas: <code>/welcome @user</code> & <code>/dish Nama Makanan</code>\n"
-        "• <code>/apply bartender</code> (Kuota 2) — Tugas: <code>/mix Nama Minuman</code> & <code>/sober @user</code>\n"
-        "• <code>/apply host</code> (Kuota 2) — Tugas: <code>/ambience</code> & <code>/toastall</code>\n"
-        "• <code>/apply dj</code> (Kuota 1) — Tugas: <code>/spinmusic Lagu - Penyanyi</code>, <code>/dedicate</code>, <code>/skip</code>\n\n"
+        "💼 <b>SISTEM SHIFT KERJA — DURASI 20 MENIT, UPAH 50 VC</b>\n"
+        "<i>Maksimal 3x shift per hari per tamu. Selesaikan minimal 5x layanan selama shift berlangsung:</i>\n\n"
+        "• <code>/apply waiter</code> — Kuota 4 — Tugas: <code>/welcome @user</code> & <code>/dish Nama Makanan</code>\n"
+        "• <code>/apply bartender</code> — Kuota 2 — Tugas: <code>/mix Nama Minuman</code> & <code>/sober @user</code>\n"
+        "• <code>/apply host</code> — Kuota 2 — Tugas: <code>/ambience</code> & <code>/toastall</code>\n"
+        "• <code>/apply dj</code> — Kuota 1 — Tugas: <code>/spinmusic Lagu - Penyanyi</code>, <code>/dedicate</code>, <code>/skip</code>\n\n"
         "• <code>/myshift</code> — Cek sisa waktu & jumlah layanan shift.\n"
         "• <code>/endshift</code> — Selesaikan shift & cairkan upah <b>50 VC</b>."
     )
@@ -617,11 +618,11 @@ async def cb_info_cmd_shift(call: types.CallbackQuery):
 async def cb_info_economy(call: types.CallbackQuery):
     await call.answer()
     text = (
-        "🎯 <b>EKONOMI VC, MISI HARIAN & REFERRAL (HANS)</b>\n\n"
-        "• <b>Bonus Tamu Baru:</b> +50 VC saat pertama kali menyapa Hans.\n"
-        "• <b>Chat RP Aktif di Grup:</b> +1 VC/menit untuk obrolan minimal 3 kata.\n"
-        "• <b>Absen Harian (<code>/daily</code>):</b> +20 VC setiap hari.\n"
-        "• <b>Curhat & PM Channel:</b> Kirim curhat anonim (5 VC) atau PM menfess (10 VC) langsung dari lobi Hans (Gratis untuk VIP).\n"
-        "• <b>Undang Teman (Referral):</b> Bagikan tautan undanganmu—kamu dan temanmu sama-sama mendapat <b>+50 VC</b>."
+        "🎯 <b>EKONOMI VC, MISI HARIAN & REFERRAL — HANS</b>\n\n"
+        f"• <b>Bonus Tamu Baru:</b> +{WELCOME_BONUS} VC saat pertama kali menyapa Hans.\n"
+        "• <b>Chat RP Aktif di Grup:</b> +1 VC per menit untuk obrolan minimal 3 kata.\n"
+        f"• <b>Absen Harian <code>/daily</code>:</b> +{DAILY_REWARD_VC} VC setiap hari.\n"
+        "• <b>Confess & Promote Channel:</b> Kirim curhat anonim 5 VC atau promosi lapak 10 VC langsung dari lobi Hans — Gratis untuk VIP.\n"
+        f"• <b>Undang Teman Referral:</b> Bagikan tautan undanganmu—kamu dan temanmu sama-sama mendapat <b>+{REFERRAL_BONUS_VC} VC</b>."
     )
     await call.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=back_info_kb())
