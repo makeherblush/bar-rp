@@ -6,6 +6,7 @@ from datetime import datetime
 
 from pydantic import Field
 from aiogram import Bot, types
+from aiogram.enums import ParseMode
 from aiogram.methods import TelegramMethod
 from aiogram.types import (
     BotCommand,
@@ -22,8 +23,8 @@ import shared.config as cfg
 bot = Bot(token=cfg.TOKEN_JULIAN)
 hans_bot = Bot(token=cfg.TOKEN_HANS) if getattr(cfg, "TOKEN_HANS", None) else bot
 
-OWNER_ID = cfg.OWNER_ID
-GROUP_ID = cfg.GROUP_ID
+OWNER_ID = int(getattr(cfg, "OWNER_ID", 0) or 0)
+GROUP_ID = int(getattr(cfg, "GROUP_ID", 0) or 0)
 TELEGRAM_DEEP_MINIAPP_URL = "https://t.me/JulianVanceVH_bot/menu"
 WEBAPP_DIRECT_URL = (
     os.environ.get("MINIAPP_MENU_URL")
@@ -47,6 +48,13 @@ BARTENDER_GREETINGS = [
     "🍸 <i>Julian menghentikan sejenak gerakan shaker-nya, mengelap gelas kristal dengan kain linen bersih, lalu menatap ke arah pintu masuk.</i>\n\n\"Selamat malam, {mention}. Selamat datang di <b>The Velvet Hour</b>. Duduklah di mana pun Anda merasa nyaman—gelas pertama selalu siap diracik untuk tamu baru.\"",
     "🥂 <i>Dentingan lembut es batu di dalam gelas menyambut langkah kaki yang baru tiba di lantai lounge. Julian tersenyum tipis dari balik meja bar mahoni.</i>\n\n\"Malam yang indah untuk singgah, {mention}. Silakan lihat buku menu kami jika ingin memesan minuman atau sekadar menikmati alunan musik malam ini.\"",
     "🕯️ <i>Cahaya lampu gantung temaram memantul di permukaan botol-botol kristal saat pintu beludru terbuka. Julian mengangguk sopan menyambut kedatangan tamu baru.</i>\n\n\"Selamat datang di <b>The Velvet Hour</b>, {mention}. Meja bar selalu terbuka—beri tahu saya jika Anda butuh sesuatu untuk menghangatkan suasana.\"",
+]
+
+JULIAN_RC_REPLIES = [
+    "<i>Julian menghentikan sejenak gerakannya mengelap gelas kristal, menatapmu dengan senyum tipis di balik meja bar.</i>\n\n<b>\"Ada yang bisa saya bantu racikkan malam ini, {name}? Sebutkan saja, atau gunakan <code>/menu</code> untuk membuka buku menu.\"</b>",
+    "<i>Sambil memutar gelas lowball di atas meja kayu ek, Julian mengangguk ramah ke arahmu.</i>\n\n<b>\"Malam yang tenang di The Velvet Hour, {name}. Perlu minuman hangat atau sesuatu yang lebih kuat?\"</b>",
+    "<i>Julian mencondongkan tubuh sedikit ke depan meja bar, mendengarkan dengan penuh perhatian.</i>\n\n<b>\"Saya mendengarkan, {name}. Nikmati suasana lounge malam ini—beri tahu saja jika gelasmu sudah kosong.\"</b>",
+    "<i>Cahaya lampu gantung memantul di gelas shaker perak saat Julian menoleh ke arahmu.</i>\n\n<b>\"Selamat malam, {name}. Kalau butuh rekomendasi minuman atau ingin mentraktir tamu lain, tinggal panggil saja.\"</b>",
 ]
 
 DRINKS_CATALOG = {
@@ -251,8 +259,9 @@ ROLE_EXTRA_COMMANDS = {
 }
 
 
-async def update_member_shift_commands(user_id: int, role: str | None):
-    if not GROUP_ID:
+async def update_member_shift_commands(user_id: int, role: str | None, chat_id: int | None = None):
+    target_chat = chat_id or GROUP_ID
+    if not target_chat:
         return
     base = get_base_group_commands()
     if role and role in ROLE_EXTRA_COMMANDS:
@@ -265,14 +274,13 @@ async def update_member_shift_commands(user_id: int, role: str | None):
     try:
         await bot.set_my_commands(
             cmds,
-            scope=BotCommandScopeChatMember(chat_id=GROUP_ID, user_id=user_id),
+            scope=BotCommandScopeChatMember(chat_id=target_chat, user_id=user_id),
         )
     except Exception as e:
         logging.debug("Gagal update_member_shift_commands untuk %s: %s", user_id, e)
 
 
 async def add_shift_action(user_id: int, allowed_roles: tuple[str, ...] | None = None) -> tuple[int, bool]:
-    """Menambah progres service_count +1 otomatis jika user sedang shift aktif."""
     now = datetime.utcnow()
     async with db.pool.acquire() as conn:
         if allowed_roles:
@@ -327,7 +335,7 @@ class SetChatMemberTag(TelegramMethod[bool]):
 
 
 async def set_guest_tag(chat_id: int, user_id: int, tag: str | None) -> bool:
-    if user_id == OWNER_ID:
+    if not chat_id or user_id == OWNER_ID:
         return False
     clean_tag = tag[:16] if tag else ""
     try:
@@ -396,8 +404,13 @@ async def schedule_delete(chat_id: int, message_ids: list[int], delay: int = 45)
     asyncio.create_task(_worker())
 
 
-async def reply_and_autodelete(message: types.Message, text: str, delay: int = 45) -> types.Message:
-    sent = await message.reply(text, parse_mode=ParseMode.HTML)
+async def reply_and_autodelete(
+    message: types.Message,
+    text: str,
+    delay: int = 45,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> types.Message:
+    sent = await message.reply(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
     await schedule_delete(message.chat.id, [sent.message_id], delay=delay)
     return sent
 
