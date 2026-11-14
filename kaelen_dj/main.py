@@ -19,7 +19,12 @@ from pytgcalls.types import MediaStream, AudioQuality
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, BotCommandScopeAllGroupChats, ReactionTypeEmoji
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeChat,
+    ReactionTypeEmoji,
+)
 from aiogram.enums import ParseMode
 
 import shared.database as db
@@ -33,7 +38,9 @@ OWNER_ID = int(cfg.OWNER_ID)
 SONG_REQUEST_COST = 10
 AUTO_DELETE_DELAY = 45
 OS_MUTE_SWEEP_INTERVAL = 10
-OS_IDLE_TIMEOUT = 300  # 5 menit tanpa lagu -> tutup OS otomatis
+OS_IDLE_TIMEOUT = 300
+SHIFT_REQUIRED_ACTIONS = 5
+SHIFT_REWARD_VC = 50
 CACHE_DIR = "/tmp/kaelen_cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -187,6 +194,61 @@ def _schedule_delete(chat_id: int, message_ids: list[int], delay: int = AUTO_DEL
     _spawn_task(_worker())
 
 
+# --- SINKRONISASI PROGRES SHIFT ROLE DJ ---
+async def _is_active_dj_shift(user_id: int) -> bool:
+    now = datetime.utcnow()
+    try:
+        async with db.pool.acquire() as conn:
+            val = await conn.fetchval(
+                """
+                SELECT 1 FROM active_shifts
+                WHERE user_id = $1
+                  AND ends_at > $2
+                  AND LOWER(role_name) = 'dj'
+                """,
+                user_id,
+                now,
+            )
+            return bool(val)
+    except Exception:
+        return False
+
+
+async def _increment_dj_shift_action(user_id: int) -> tuple[int, bool]:
+    """Menambah service_count +1 otomatis jika user sedang shift aktif sebagai dj."""
+    now = datetime.utcnow()
+    try:
+        async with db.pool.acquire() as conn:
+            new_val = await conn.fetchval(
+                """
+                UPDATE active_shifts
+                SET service_count = COALESCE(service_count, 0) + 1
+                WHERE user_id = $1
+                  AND ends_at > $2
+                  AND LOWER(role_name) = 'dj'
+                RETURNING service_count
+                """,
+                user_id,
+                now,
+            )
+            if new_val is None:
+                return 0, False
+            return int(new_val), True
+    except Exception:
+        return 0, False
+
+
+def _format_dj_shift_note(cnt: int, is_active: bool) -> str:
+    if not is_active:
+        return ""
+    if cnt >= SHIFT_REQUIRED_ACTIONS:
+        return (
+            f"\n\n📊 <i>Progres Shift DJ: <b>{cnt}/{SHIFT_REQUIRED_ACTIONS}</b> layanan "
+            f"— Target tercapai! Ketik <code>/endshift</code> untuk klaim <b>+{SHIFT_REWARD_VC} VC</b>.</i>"
+        )
+    return f"\n\n📊 <i>Progres Shift DJ: <b>{cnt}/{SHIFT_REQUIRED_ACTIONS}</b> layanan</i>"
+
+
 async def ensure_kaelen_schema():
     async with db.pool.acquire() as conn:
         await conn.execute("""
@@ -201,7 +263,6 @@ async def ensure_kaelen_schema():
             );
         """)
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_thread_id BIGINT;")
-        # Bersihkan antrean lama yang tertinggal saat bot restart
         await conn.execute("UPDATE song_requests SET status = 'expired' WHERE status IN ('queued', 'playing');")
 
 
@@ -228,7 +289,7 @@ async def _send_kaelen_msg(text: str, thread_id: int | None = None, auto_delete:
             return None
 
 
-# --- STRICT LISTEN-ONLY OS (HANYA OWNER, ADMIN & ASISTEN YANG BISA BICARA/UNMUTE) ---
+# --- STRICT LISTEN-ONLY OS ---
 async def _get_privileged_os_user_ids(force_refresh: bool = False) -> set[int]:
     global _privileged_cache, _privileged_cache_ts
     now = time.monotonic()
@@ -435,7 +496,7 @@ async def _enforce_os_listener_mute(client: Client, update, users, chats):
         pass
 
 
-# --- JALUR 1: MUSIC_VAULT_ID (GUDANG CHANNEL MUSIK) ---
+# --- JALUR 1: MUSIC_VAULT_ID ---
 async def _search_music_vault(query: str) -> dict | None:
     if not MUSIC_VAULT_ID:
         return None
@@ -457,7 +518,7 @@ async def _search_music_vault(query: str) -> dict | None:
                     "source_label": "Music Vault",
                 }
     except Exception as e:
-        logger.warning("Gagal mencari di MUSIC_VAULT_ID (%s): %s", MUSIC_VAULT_ID, e)
+        logger.warning("Gagal mencari di MUSIC_VAULT_ID %s: %s", MUSIC_VAULT_ID, e)
     return None
 
 
@@ -647,8 +708,8 @@ async def _play_next_in_queue():
                 else f"<b>{html.escape(next_track.title)}</b>"
             )
             await _send_kaelen_msg(
-                f"🎧 <b>Now Spinning — Kaelen Booth</b> (📀 {html.escape(next_track.source_label)})\n"
-                f"• Lagu: {link_part} (<code>{next_track.duration}</code>)\n"
+                f"🎧 <b>Now Spinning — Kaelen Booth</b> • 📀 {html.escape(next_track.source_label)}\n"
+                f"• Lagu: {link_part} • <code>{next_track.duration}</code>\n"
                 f"• Permintaan: {_mention(next_track.requester_id, next_track.requester_name)}",
                 thread_id=next_track.thread_id,
                 auto_delete=55,
@@ -657,7 +718,7 @@ async def _play_next_in_queue():
             logger.error("PyTgCalls play error: %s", e)
             await _send_kaelen_msg(
                 f"⚠️ Asisten Kaelen gagal memutar <b>{html.escape(next_track.title)}</b> di OS.\n"
-                f"<i>({html.escape(str(e))})</i>",
+                f"<i>{html.escape(str(e))}</i>",
                 thread_id=next_track.thread_id,
                 auto_delete=30,
             )
@@ -680,6 +741,7 @@ async def enqueue_song_request(
     thread_id: int | None = None,
     db_req_id: int | None = None,
     announce_queue: bool = True,
+    extra_note: str = "",
 ) -> bool:
     global current_track, is_paused, _idle_since
 
@@ -706,7 +768,6 @@ async def enqueue_song_request(
         source_label=info.get("source_label", "Music Vault"),
     )
 
-    # Jika PyTgCalls sedang tidak aktif memutar di OS, reset current_track agar langsung play
     if current_track is not None and not _is_actively_playing_in_os():
         current_track = None
         is_paused = False
@@ -716,12 +777,14 @@ async def enqueue_song_request(
 
     if current_track is None:
         await _play_next_in_queue()
+        if extra_note:
+            await _send_kaelen_msg(extra_note.lstrip("\n"), thread_id=thread_id, auto_delete=30)
     elif announce_queue:
         pos = len(music_queue)
         await _send_kaelen_msg(
-            f"💿 <b>Ditambahkan ke Antrean (#{pos})</b>\n"
-            f"• Lagu: <b>{html.escape(track.title)}</b> (<code>{track.duration}</code>)\n"
-            f"• Oleh: {_mention(uid, requester_name)}",
+            f"💿 <b>Ditambahkan ke Antrean — Urutan {pos}</b>\n"
+            f"• Lagu: <b>{html.escape(track.title)}</b> • <code>{track.duration}</code>\n"
+            f"• Oleh: {_mention(uid, requester_name)}{extra_note}",
             thread_id=thread_id,
             auto_delete=35,
         )
@@ -751,7 +814,9 @@ async def _poll_webapp_song_queue():
                 rname = r["requester_name"] or "Tamu Lounge"
                 title = r["song_title"]
                 tid = r["thread_id"]
-                logger.info("Memproses request web: '%s' dari %s (id=%s)", title, rname, r["id"])
+                logger.info("Memproses request web: '%s' dari %s id=%s", title, rname, r["id"])
+                cnt, is_dj = await _increment_dj_shift_action(uid)
+                dj_note = _format_dj_shift_note(cnt, is_dj)
                 await enqueue_song_request(
                     query=title,
                     uid=uid,
@@ -759,6 +824,7 @@ async def _poll_webapp_song_queue():
                     thread_id=tid,
                     db_req_id=r["id"],
                     announce_queue=True,
+                    extra_note=dj_note,
                 )
         except Exception as e:
             logger.error("Error polling song_requests: %s", e)
@@ -766,13 +832,13 @@ async def _poll_webapp_song_queue():
         await asyncio.sleep(2)
 
 
-@dp.message(Command("play", "reqsong"), F.chat.type.in_({"group", "supergroup"}))
+@dp.message(Command("play", "reqsong", "spinmusic"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_play_song(message: types.Message):
     user = message.from_user
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
         err = await message.reply(
-            "🎶 Format: <code>/play Judul Lagu - Penyanyi</code> (<b>10 VC</b>, Gratis VIP).",
+            "🎶 Format: <code>/play Judul Lagu - Penyanyi</code> — <b>10 VC</b>, Gratis VIP & Staf DJ.",
             parse_mode=ParseMode.HTML,
         )
         _schedule_delete(message.chat.id, [message.message_id, err.message_id], delay=20)
@@ -780,6 +846,7 @@ async def cmd_play_song(message: types.Message):
 
     query = parts[1].strip()[:120]
     today = datetime.utcnow().date()
+    is_dj_shift = await _is_active_dj_shift(user.id)
 
     async with db.pool.acquire() as conn:
         async with conn.transaction():
@@ -794,12 +861,12 @@ async def cmd_play_song(message: types.Message):
 
             row = await conn.fetchrow("SELECT coins, is_vip, vip_until FROM users WHERE user_id = $1 FOR UPDATE", user.id)
             is_vip = bool(row and row["is_vip"] and (not row["vip_until"] or row["vip_until"] > datetime.utcnow()))
-            cost = 0 if is_vip else SONG_REQUEST_COST
+            cost = 0 if (is_vip or is_dj_shift) else SONG_REQUEST_COST
             coins = (row["coins"] or 0) if row else 0
 
             if coins < cost:
                 err = await message.reply(
-                    f"Saldo tidak cukup untuk memutar lagu (butuh <b>{cost} VC</b>, saldo kamu: <b>{coins} VC</b>).",
+                    f"Saldo tidak cukup untuk memutar lagu — butuh <b>{cost} VC</b>, saldo kamu: <b>{coins} VC</b>.",
                     parse_mode=ParseMode.HTML,
                 )
                 _schedule_delete(message.chat.id, [message.message_id, err.message_id], delay=20)
@@ -825,13 +892,43 @@ async def cmd_play_song(message: types.Message):
         parse_mode=ParseMode.HTML,
     )
 
+    cnt, active_dj = await _increment_dj_shift_action(user.id)
+    dj_note = _format_dj_shift_note(cnt, active_dj)
+
     ok = await enqueue_song_request(
         query=query,
         uid=user.id,
         requester_name=user.first_name,
         thread_id=message.message_thread_id,
+        extra_note=dj_note,
     )
     _schedule_delete(message.chat.id, [message.message_id, search_msg.message_id], delay=5 if ok else 15)
+
+
+@dp.message(Command("dedicate"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_dedicate_song(message: types.Message):
+    user = message.from_user
+    parts = (message.text or "").split(maxsplit=1)
+    dedication_text = html.escape(parts[1].strip()[:140]) if len(parts) > 1 and parts[1].strip() else ""
+    if not dedication_text:
+        err = await message.reply(
+            "Format: <code>/dedicate @username Pesan dedikasi lagu malam ini</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        _schedule_delete(message.chat.id, [message.message_id, err.message_id], delay=20)
+        return
+
+    cnt, active_dj = await _increment_dj_shift_action(user.id)
+    dj_note = _format_dj_shift_note(cnt, active_dj)
+    now_song = f"\n• Lagu saat ini: <b>{html.escape(current_track.title)}</b>" if current_track else ""
+
+    await react_msg(message.chat.id, message.message_id, "🎙️")
+    msg = await message.reply(
+        f"🎙️ <b>DEDIKASI NADA — {_mention(user.id, user.first_name)}</b>{now_song}\n\n"
+        f"<i>\"{dedication_text}\"</i>{dj_note}",
+        parse_mode=ParseMode.HTML,
+    )
+    _schedule_delete(message.chat.id, [message.message_id, msg.message_id], delay=45)
 
 
 @dp.message(Command("np", "nowplaying"), F.chat.type.in_({"group", "supergroup"}))
@@ -844,7 +941,7 @@ async def cmd_now_playing(message: types.Message):
     state = "⏸ Dijeda" if is_paused else "▶️ Sedang Diputar"
     msg = await message.reply(
         f"🎧 <b>{state}</b>\n"
-        f"• Lagu: <b>{html.escape(current_track.title)}</b> (<code>{current_track.duration}</code>)\n"
+        f"• Lagu: <b>{html.escape(current_track.title)}</b> • <code>{current_track.duration}</code>\n"
         f"• Request oleh: {_mention(current_track.requester_id, current_track.requester_name)}\n"
         f"• Antrean berikutnya: <b>{len(music_queue)}</b> lagu",
         parse_mode=ParseMode.HTML,
@@ -861,7 +958,7 @@ async def cmd_music_queue(message: types.Message):
 
     lines = []
     if current_track:
-        lines.append(f"▶️ <b>Sekarang:</b> {html.escape(current_track.title)} ({html.escape(current_track.requester_name)})")
+        lines.append(f"▶️ <b>Sekarang:</b> {html.escape(current_track.title)} — {html.escape(current_track.requester_name)}")
     for idx, t in enumerate(list(music_queue)[:10], start=1):
         lines.append(f"{idx}. {html.escape(t.title)} — <i>{html.escape(t.requester_name)}</i>")
 
@@ -877,16 +974,23 @@ async def cmd_skip_song(message: types.Message):
         return
 
     uid = message.from_user.id
-    if uid != OWNER_ID and uid != current_track.requester_id:
+    is_dj_shift = await _is_active_dj_shift(uid)
+    if uid != OWNER_ID and uid != current_track.requester_id and not is_dj_shift:
         member = await bot.get_chat_member(message.chat.id, uid)
         if member.status not in ("administrator", "creator"):
-            err = await message.reply("Hanya pemesan lagu ini atau Admin yang bisa melewati lagu.")
+            err = await message.reply("Hanya pemesan lagu ini, staf DJ aktif, atau Admin yang bisa melewati lagu.")
             _schedule_delete(message.chat.id, [message.message_id, err.message_id], delay=15)
             return
 
+    cnt, active_dj = await _increment_dj_shift_action(uid)
+    dj_note = _format_dj_shift_note(cnt, active_dj)
+
     skipped_title = current_track.title
     await react_msg(message.chat.id, message.message_id, "⏭️")
-    msg = await message.reply(f"⏭️ Kaelen mengangkat jarum gramofon dan melewati <b>{html.escape(skipped_title)}</b>.", parse_mode=ParseMode.HTML)
+    msg = await message.reply(
+        f"⏭️ Kaelen mengangkat jarum gramofon dan melewati <b>{html.escape(skipped_title)}</b>.{dj_note}",
+        parse_mode=ParseMode.HTML,
+    )
     _schedule_delete(message.chat.id, [message.message_id, msg.message_id], delay=20)
     await _play_next_in_queue()
 
@@ -950,8 +1054,10 @@ async def cmd_stop_music(message: types.Message):
 
 @dp.message(Command("vibe"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_dj_vibe(message: types.Message):
+    cnt, active_dj = await _increment_dj_shift_action(message.from_user.id)
+    dj_note = _format_dj_shift_note(cnt, active_dj)
     msg = await message.reply(
-        "🕯️ <i>Kaelen menyesuaikan equalizer di meja DJ, membiarkan dentuman bass lembut berpadu dengan cahaya temaram The Velvet Hour...</i>",
+        f"🕯️ <i>Kaelen menyesuaikan equalizer di meja DJ, membiarkan dentuman bass lembut berpadu dengan cahaya temaram The Velvet Hour...</i>{dj_note}",
         parse_mode=ParseMode.HTML,
     )
     _schedule_delete(message.chat.id, [message.message_id, msg.message_id], delay=35)
@@ -959,16 +1065,24 @@ async def cmd_dj_vibe(message: types.Message):
 
 async def register_kaelen_commands():
     cmds = [
-        BotCommand(command="play", description="Putar lagu di OS (10 VC / Gratis VIP)"),
+        BotCommand(command="play", description="Putar lagu di OS 10 VC / Gratis VIP & DJ"),
+        BotCommand(command="reqsong", description="Request lagu di Obrolan Suara"),
+        BotCommand(command="spinmusic", description="Tugas DJ: putar lagu pilihan"),
+        BotCommand(command="dedicate", description="Tugas DJ: dedikasikan lagu untuk tamu"),
         BotCommand(command="np", description="Lihat lagu yang sedang diputar"),
         BotCommand(command="queue", description="Lihat daftar antrean lagu DJ"),
         BotCommand(command="skip", description="Lewati lagu saat ini"),
         BotCommand(command="pause", description="Jeda musik di OS"),
         BotCommand(command="resume", description="Lanjutkan musik yang dijeda"),
-        BotCommand(command="stop", description="[Admin] Hentikan musik & bersihkan antrean"),
+        BotCommand(command="stop", description="Admin Hentikan musik & bersihkan antrean"),
         BotCommand(command="vibe", description="Atur atmosfer musik lounge"),
     ]
     await bot.set_my_commands(cmds, scope=BotCommandScopeAllGroupChats())
+    if GROUP_ID:
+        try:
+            await bot.set_my_commands(cmds, scope=BotCommandScopeChat(chat_id=GROUP_ID))
+        except Exception as e:
+            logger.warning("Gagal set command scope chat GROUP_ID Kaelen: %s", e)
 
 
 async def main():
@@ -999,7 +1113,7 @@ async def main():
     await _get_privileged_os_user_ids(force_refresh=True)
     await call_py.start()
     logger.info(
-        "Akun Asisten Kaelen (@%s / %s) & PyTgCalls aktif! MUSIC_VAULT_ID: %s",
+        "Akun Asisten Kaelen @%s / %s & PyTgCalls aktif! MUSIC_VAULT_ID: %s",
         me.username or me.first_name,
         me.id,
         MUSIC_VAULT_ID,
