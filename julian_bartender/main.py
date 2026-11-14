@@ -31,12 +31,6 @@ from julian_bartender.bar_service import router as bar_service_router
 from julian_bartender.games import router as games_router
 from julian_bartender.shifts import router as shifts_router
 
-try:
-    from hans_concierge.webapp_server import start_webapp_server
-except Exception as e:
-    start_webapp_server = None
-    logging.warning("Gagal import start_webapp_server: %s", e)
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("julian_bartender")
 
@@ -172,21 +166,11 @@ async def register_julian_commands():
             logger.info("MenuButtonWebApp terpasang ke: %s", WEBAPP_DIRECT_URL)
         except Exception as e:
             logger.warning("Gagal pasang MenuButtonWebApp: %s", e)
-    else:
-        logger.warning("MINIAPP_MENU_URL di Railway harus berupa URL https:// domain Railway, saat ini: %s", WEBAPP_DIRECT_URL)
 
 
 async def main():
     await db.init_db()
     await ensure_julian_schema()
-
-    if start_webapp_server is not None:
-        try:
-            await start_webapp_server()
-            logger.info("Web App server aktif di 0.0.0.0:%s", os.environ.get("PORT", "8080"))
-        except Exception as e:
-            logger.exception("Gagal menjalankan Web App server: %s", e)
-
     await register_julian_commands()
     await bot.delete_webhook(drop_pending_updates=False)
     asyncio.create_task(_sync_member_tags_worker())
