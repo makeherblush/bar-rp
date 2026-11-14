@@ -2,6 +2,7 @@ import os
 import json
 import html
 import glob
+import time
 import asyncio
 import logging
 import urllib.parse
@@ -75,6 +76,8 @@ current_track: TrackItem | None = None
 is_paused: bool = False
 _bg_tasks: set[asyncio.Task] = set()
 _assistant_user_id: int = 0
+_privileged_cache: set[int] = {OWNER_ID}
+_privileged_cache_ts: float = 0.0
 
 
 def _spawn_task(coro) -> asyncio.Task:
@@ -222,31 +225,59 @@ async def _send_kaelen_msg(text: str, thread_id: int | None = None, auto_delete:
             return None
 
 
-# --- STRICT LISTEN-ONLY OS (HANYA OWNER & ASISTEN YANG BISA BICARA/UNMUTE) ---
-async def _mute_all_non_owners(call):
+# --- STRICT LISTEN-ONLY OS (HANYA OWNER, ADMIN & ASISTEN YANG BISA BICARA/UNMUTE) ---
+async def _get_privileged_os_user_ids(force_refresh: bool = False) -> set[int]:
+    global _privileged_cache, _privileged_cache_ts
+    now = time.monotonic()
+    if not force_refresh and (now - _privileged_cache_ts) < 60.0 and _privileged_cache:
+        priv = set(_privileged_cache)
+        priv.add(OWNER_ID)
+        if _assistant_user_id:
+            priv.add(_assistant_user_id)
+        return priv
+
+    priv = {OWNER_ID}
+    if _assistant_user_id:
+        priv.add(_assistant_user_id)
+    try:
+        admins = await bot.get_chat_administrators(GROUP_ID)
+        for m in admins:
+            if getattr(m, "user", None) and m.user.id:
+                priv.add(int(m.user.id))
+        _privileged_cache = priv
+        _privileged_cache_ts = now
+    except Exception as e:
+        logger.debug("Gagal memuat daftar admin grup: %s", e)
+        priv.update(_privileged_cache)
+    return priv
+
+
+async def _mute_all_non_admins(call):
     if not call:
         return
     try:
+        privileged_ids = await _get_privileged_os_user_ids()
         res = await assistant.invoke(
             functions.phone.GetGroupParticipants(
                 call=call,
                 ids=[],
                 sources=[],
                 offset="",
-                limit=100,
+                limit=200,
             )
         )
         for p in getattr(res, "participants", []):
             peer_uid = getattr(getattr(p, "peer", None), "user_id", None)
-            if not peer_uid or peer_uid in (OWNER_ID, _assistant_user_id):
+            if not peer_uid or peer_uid in privileged_ids:
                 continue
-            if not getattr(p, "muted", True) or getattr(p, "can_self_unmute", False):
+            if not getattr(p, "muted", True) or getattr(p, "can_self_unmute", False) or getattr(p, "raise_hand_rating", None) is not None:
                 target_peer = await assistant.resolve_peer(peer_uid)
                 await assistant.invoke(
                     functions.phone.EditGroupCallParticipant(
                         call=call,
                         participant=target_peer,
                         muted=True,
+                        raise_hand=False,
                     )
                 )
     except Exception as e:
@@ -282,7 +313,7 @@ async def _ensure_voice_chat_open_and_muted():
                 )
             except Exception:
                 pass
-            await _mute_all_non_owners(call)
+            await _mute_all_non_admins(call)
         return call
     except Exception as e:
         logger.error("Gagal membuka/mengatur OS: %s", e)
@@ -309,16 +340,18 @@ async def _enforce_os_listener_mute(client: Client, update, users, chats):
     if not isinstance(update, raw_types.UpdateGroupCallParticipants):
         return
     try:
+        privileged_ids = await _get_privileged_os_user_ids()
         for p in update.participants:
             peer_uid = getattr(getattr(p, "peer", None), "user_id", None)
-            if not peer_uid or peer_uid in (OWNER_ID, _assistant_user_id):
+            if not peer_uid or peer_uid in privileged_ids:
                 continue
 
+            just_joined = getattr(p, "just_joined", False)
             is_unmuted = not getattr(p, "muted", True)
             can_unmute = getattr(p, "can_self_unmute", False)
             raised_hand = getattr(p, "raise_hand_rating", None) is not None
 
-            if is_unmuted or can_unmute or raised_hand:
+            if just_joined or is_unmuted or can_unmute or raised_hand:
                 target_peer = await client.resolve_peer(peer_uid)
                 await client.invoke(
                     functions.phone.EditGroupCallParticipant(
@@ -534,7 +567,7 @@ async def _play_next_in_queue():
             )
             await call_py.play(GROUP_ID, stream)
             await _unmute_assistant_in_call(call)
-            await _mute_all_non_owners(call)
+            await _mute_all_non_admins(call)
 
             link_part = (
                 f'<a href="{html.escape(next_track.webpage_url)}">{html.escape(next_track.title)}</a>'
@@ -887,6 +920,7 @@ async def main():
     await assistant.start()
     me = await assistant.get_me()
     _assistant_user_id = me.id
+    await _get_privileged_os_user_ids(force_refresh=True)
     await call_py.start()
     logger.info(
         "Akun Asisten Kaelen (@%s / %s) & PyTgCalls aktif! MUSIC_VAULT_ID: %s",
