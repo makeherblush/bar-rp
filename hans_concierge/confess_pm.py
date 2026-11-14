@@ -9,8 +9,9 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedIn
 from aiogram.enums import ParseMode
 
 import shared.database as db
+import shared.config as cfg
 from hans_concierge.helpers import (
-    bot, CHANNEL_ID, CONFESS_COST_VC, PM_COST_VC, react_message,
+    bot, CONFESS_COST_VC, PM_COST_VC, react_message,
     get_bar_setting, log_wallet_tx, insufficient_vc_kb, main_lobby_kb
 )
 from hans_concierge.card_gen import generate_channel_post_card, EFFECT_HEART
@@ -37,8 +38,8 @@ def _format_user_html(raw_text: str) -> str:
 async def _resolve_channel_id() -> int | str | None:
     db_ch = await get_bar_setting("target_channel_id")
     if db_ch:
-        return int(db_ch) if db_ch.lstrip("-").isdigit() else db_ch
-    return CHANNEL_ID
+        return int(db_ch) if str(db_ch).lstrip("-").isdigit() else db_ch
+    return getattr(cfg, "CH_INFO_ID", None) or getattr(cfg, "CH_PROMOTE_ID", None)
 
 
 def _build_post_link(ch_id: int | str, sent_msg: types.Message) -> str | None:
@@ -49,6 +50,9 @@ def _build_post_link(ch_id: int | str, sent_msg: types.Message) -> str | None:
     raw_id = str(ch_id)
     if raw_id.startswith("-100"):
         return f"https://t.me/c/{raw_id[4:]}/{sent_msg.message_id}"
+    info_link = getattr(cfg, "CH_INFO_LINK", "")
+    if info_link.startswith("https://"):
+        return info_link
     return None
 
 
@@ -71,7 +75,7 @@ async def cb_menu_confess(call: types.CallbackQuery, state: FSMContext):
         return await _edit_or_replace(
             call,
             "⚠️ <b>Channel Confession Belum Dikonfigurasi</b>\n\n"
-            "<i>Owner dapat mengatur channel tujuan melalui <b>Panel Kontrol Admin / Owner</b> atau perintah <code>/setch -100xxxx</code>.</i>",
+            "<i>Owner dapat mengatur channel tujuan melalui <b>Panel Kontrol Admin</b> atau perintah <code>/setch -100xxxx</code>.</i>",
             await main_lobby_kb(call.from_user.id),
         )
 
@@ -185,9 +189,9 @@ async def _publish_confess(message: types.Message, content: str):
         )
     except Exception as e:
         await message.answer(
-            f"⚠️ <b>Gagal mengirim ke channel</b>\n"
+            f"⚠️ <b>Gagal mengirim ke channel</b> (<code>{html.escape(str(ch_id))}</code>)\n"
             f"Detail: <code>{html.escape(str(e))}</code>\n"
-            f"<i>Pastikan @HansVolkovVH_bot sudah dijadikan Admin dengan izin 'Post Messages' di Channel tersebut.</i>",
+            f"<i>Pastikan @{me.username} sudah dijadikan Admin dengan izin 'Post Messages' di Channel tersebut.</i>",
             parse_mode=ParseMode.HTML,
             reply_markup=await main_lobby_kb(user.id)
         )
@@ -202,7 +206,7 @@ async def cb_menu_pm(call: types.CallbackQuery, state: FSMContext):
         return await _edit_or_replace(
             call,
             "⚠️ <b>Channel Menfess Belum Dikonfigurasi</b>\n\n"
-            "<i>Owner dapat mengatur channel tujuan melalui <b>Panel Kontrol Admin / Owner</b> atau perintah <code>/setch -100xxxx</code>.</i>",
+            "<i>Owner dapat mengatur channel tujuan melalui <b>Panel Kontrol Admin</b> atau perintah <code>/setch -100xxxx</code>.</i>",
             await main_lobby_kb(call.from_user.id),
         )
 
@@ -325,7 +329,7 @@ async def fsm_pm_text(message: types.Message, state: FSMContext):
         )
     except Exception as e:
         await message.answer(
-            f"⚠️ <b>Gagal mengirim ke channel</b>\n"
+            f"⚠️ <b>Gagal mengirim ke channel</b> (<code>{html.escape(str(ch_id))}</code>)\n"
             f"Detail: <code>{html.escape(str(e))}</code>",
             parse_mode=ParseMode.HTML,
             reply_markup=await main_lobby_kb(user.id)
