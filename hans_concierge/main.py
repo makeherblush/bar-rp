@@ -16,6 +16,7 @@ from aiogram.types import (
 from aiogram.enums import ParseMode
 
 import shared.database as db
+import shared.config as cfg
 from shared.config import OWNER_ID
 from hans_concierge.helpers import (
     bot,
@@ -84,7 +85,13 @@ async def _build_admin_dashboard(user_id: int) -> tuple[str, InlineKeyboardMarku
         if cur_pw
         else "<i>Nonaktif — bebas masuk dengan CN</i>"
     )
-    cur_ch = await get_bar_setting("target_channel_id") or "<i>Belum diatur</i>"
+    active_ch = (
+        await get_bar_setting("target_channel_id")
+        or getattr(cfg, "CH_INFO_ID", None)
+        or getattr(cfg, "CH_PROMOTE_ID", None)
+        or "Belum diatur"
+    )
+    promote_ch = getattr(cfg, "CH_PROMOTE_ID", None) or "Belum diatur"
 
     async with db.pool.acquire() as conn:
         total_users = await conn.fetchval("SELECT COUNT(*) FROM users") or 0
@@ -97,7 +104,8 @@ async def _build_admin_dashboard(user_id: int) -> tuple[str, InlineKeyboardMarku
             "👑 <b>PANEL KONTROL UTAMA — OWNER THE VELVET HOUR</b>\n\n"
             f"📊 <b>Ringkasan Bar:</b> {total_users} Tamu | {total_vip} VIP Aktif | {total_shops} Lapak | {total_posts} Confess & PM\n"
             f"🔐 <b>Password Pintu:</b> {pw_status}\n"
-            f"📢 <b>Channel Confess & PM:</b> <code>{html.escape(str(cur_ch))}</code>\n\n"
+            f"📢 <b>Channel Confess & PM:</b> <code>{html.escape(str(active_ch))}</code>\n"
+            f"📣 <b>Channel Promote:</b> <code>{html.escape(str(promote_ch))}</code>\n\n"
             "<i>Pilih tombol aksi di bawah ini atau gunakan slash command cepat:</i>"
         )
         buttons = [
@@ -312,13 +320,33 @@ async def cb_adm_setch(call: types.CallbackQuery, state: FSMContext):
         return await call.answer("Khusus Owner bar!", show_alert=True)
     await call.answer()
     await state.set_state(AdminActionState.waiting_channel_id)
+
+    preset_rows = []
+    if getattr(cfg, "CH_INFO_ID", None):
+        preset_rows.append([styled_btn("📢 Pakai CH_INFO (Railway)", callback_data="use_env_ch_info", style="success")])
+    if getattr(cfg, "CH_PROMOTE_ID", None):
+        preset_rows.append([styled_btn("📣 Pakai CH_PROMOTE (Railway)", callback_data="use_env_ch_promote", style="primary")])
+    preset_rows.append([styled_btn("❌ Batal", callback_data="open_admin_panel", style="danger")])
+
     await call.message.edit_text(
         "📢 <b>ATUR CHANNEL TUJUAN CONFESS & PM</b>\n\n"
-        "Kirimkan <b>ID Channel</b> contoh <code>-1001234567890</code> atau <b>@username_channel</b>.\n"
-        "<i>Hans akan langsung memeriksa koneksi dan izin posting di channel tersebut:</i>",
+        "Pilih tombol cepat dari variabel Railway di bawah, atau ketik manual <b>ID Channel</b> (<code>-100xxxx</code>) / <b>@username</b>:",
         parse_mode=ParseMode.HTML,
-        reply_markup=_cancel_to_admin_kb(),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=preset_rows),
     )
+
+
+@dp.callback_query(F.data.in_({"use_env_ch_info", "use_env_ch_promote"}))
+async def cb_use_env_ch(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != OWNER_ID:
+        return await call.answer("Khusus Owner bar!", show_alert=True)
+    await state.clear()
+    await call.answer("Memeriksa koneksi channel...")
+    chosen = getattr(cfg, "CH_INFO_ID", None) if call.data == "use_env_ch_info" else getattr(cfg, "CH_PROMOTE_ID", None)
+    if not chosen:
+        return await call.message.edit_text("⚠️ Variabel channel kosong di Railway.", reply_markup=_back_to_admin_kb())
+    res = await _apply_and_verify_channel(str(chosen))
+    await call.message.edit_text(res, parse_mode=ParseMode.HTML, reply_markup=_back_to_admin_kb())
 
 
 @dp.message(AdminActionState.waiting_channel_id, F.chat.type == "private")
@@ -460,6 +488,27 @@ async def _execute_addshop(target_ident: str, shop_name: str) -> str:
         )
     except Exception:
         pass
+
+    # Otomatis umumkan lapak baru di CH_PROMOTE_ID jika dikonfigurasi
+    promote_ch = getattr(cfg, "CH_PROMOTE_ID", None)
+    if promote_ch:
+        try:
+            me = await bot.get_me()
+            owner_tag = f"@{user['username']}" if user["username"] else html.escape(user["full_name"])
+            promo_kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🛍️ Kunjungi Lapak di Hans", url=f"https://t.me/{me.username}?start=shop_{shop_id}")]
+            ])
+            await bot.send_message(
+                promote_ch,
+                f"🏪 <b>LAPAK PARTNER BARU DIBUKA — THE VELVET HOUR</b>\n\n"
+                f"• <b>Nama Lapak:</b> {html.escape(shop_name)}\n"
+                f"• <b>Pemilik:</b> {owner_tag}\n\n"
+                f"<i>Kunjungi etalase sekarang dan bertransaksi menggunakan Velvet Coins!</i>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=promo_kb,
+            )
+        except Exception as e:
+            logging.warning("Gagal broadcast lapak ke CH_PROMOTE_ID: %s", e)
 
     return (
         f"✅ <b>Lapak Partner Berhasil Didaftarkan!</b>\n"
