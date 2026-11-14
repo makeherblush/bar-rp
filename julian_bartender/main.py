@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from aiogram import Dispatcher, F, types
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -8,6 +8,7 @@ from aiogram.types import (
     BotCommand,
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
+    BotCommandScopeChat,
     MenuButtonWebApp,
     WebAppInfo,
 )
@@ -18,9 +19,11 @@ from julian_bartender.helpers import (
     GROUP_ID,
     VIP_DEFAULT_TAG,
     WEBAPP_DIRECT_URL,
+    SHIFT_MAX_MINUTES,
     ensure_julian_schema,
     set_guest_tag,
     restore_default_guest_tag,
+    update_member_shift_commands,
 )
 from julian_bartender.vip_booth import router as vip_booth_router
 from julian_bartender.bar_service import router as bar_service_router
@@ -44,13 +47,15 @@ async def _sync_member_tags_worker():
     while True:
         try:
             now = datetime.utcnow()
+            cutoff_shift = now - timedelta(minutes=SHIFT_MAX_MINUTES)
             async with db.pool.acquire() as conn:
                 expired_shifts = await conn.fetch(
-                    "DELETE FROM active_shifts WHERE ends_at <= $1 RETURNING user_id",
-                    now,
+                    "DELETE FROM active_shifts WHERE started_at <= $1 RETURNING user_id",
+                    cutoff_shift,
                 )
                 for r in expired_shifts:
                     await restore_default_guest_tag(conn, GROUP_ID, r["user_id"])
+                    await update_member_shift_commands(r["user_id"], None)
 
                 active_vips = await conn.fetch("""
                     SELECT u.user_id
@@ -110,28 +115,43 @@ async def passive_rp_coin_earner(message: types.Message):
 
 async def register_julian_commands():
     group_cmds = [
-        BotCommand(command="menu", description="Buka Buku Menu & Jukebox Interaktif (Mini App)"),
-        BotCommand(command="gift", description="Kirim hadiah mewah bergambar (+Charm & Auto-Pin)"),
-        BotCommand(command="order", description="Pesan minuman (atau buka menu)"),
-        BotCommand(command="eat", description="Pesan hidangan dapur (atau buka menu)"),
-        BotCommand(command="treat", description="Traktir tamu lain (+5 Charm untuk penerima)"),
-        BotCommand(command="booth", description="[VIP] Buka topik VIP Booth eksklusif"),
-        BotCommand(command="invitebooth", description="[VIP] Undang tamu ke topik VIP Booth kamu"),
-        BotCommand(command="kickbooth", description="[VIP] Cabut akses tamu dari VIP Booth kamu"),
-        BotCommand(command="closebooth", description="[VIP] Tutup topik VIP Booth aktif"),
-        BotCommand(command="slot", description="Putar mesin slot bar (10-100 VC)"),
+        BotCommand(command="menu", description="Buka Buku Menu & Jukebox Interaktif"),
+        BotCommand(command="gift", description="Kirim hadiah mewah bergambar +Charm"),
+        BotCommand(command="order", description="Pesan minuman atau buka daftar minuman"),
+        BotCommand(command="eat", description="Pesan hidangan dapur atau buka menu makanan"),
+        BotCommand(command="treat", description="Traktir tamu lain +5 Charm untuk penerima"),
+        BotCommand(command="booth", description="VIP Buka topik VIP Booth eksklusif"),
+        BotCommand(command="invitebooth", description="VIP Undang tamu ke topik VIP Booth kamu"),
+        BotCommand(command="kickbooth", description="VIP Cabut akses tamu dari VIP Booth kamu"),
+        BotCommand(command="closebooth", description="VIP Tutup topik VIP Booth aktif"),
+        BotCommand(command="slot", description="Putar mesin slot bar 10-100 VC"),
         BotCommand(command="dart", description="Duel lempar dart 1v1 berhadiah VC"),
         BotCommand(command="dice", description="Duel dadu 1v1 berhadiah VC"),
-        BotCommand(command="mystery", description="Buka Velvet Mystery Box (40 VC)"),
+        BotCommand(command="mystery", description="Buka Velvet Mystery Box 40 VC"),
         BotCommand(command="bill", description="Cek saldo VC, Charm & status VIP"),
         BotCommand(command="topcharm", description="Lihat Top 10 Tamu Paling Memesona"),
-        BotCommand(command="apply", description="Ambil shift kerja (waiter/bartender/host)"),
+        BotCommand(command="apply", description="Ambil shift kerja waiter/bartender/host/dj"),
+        BotCommand(command="myshift", description="Cek sisa waktu & progres layanan shift"),
+        BotCommand(command="endshift", description="Selesaikan shift & cairkan upah VC"),
+        BotCommand(command="mix", description="Tugas Bartender: racik minuman"),
+        BotCommand(command="sober", description="Tugas Bartender: sadarkan tamu"),
+        BotCommand(command="welcome", description="Tugas Waiter: sambut tamu baru"),
+        BotCommand(command="dish", description="Tugas Waiter: antar hidangan"),
+        BotCommand(command="ambience", description="Tugas Host: atur suasana lounge"),
+        BotCommand(command="toastall", description="Tugas Host: ajak seluruh tamu bersulang"),
     ]
     private_cmds = [
         BotCommand(command="start", description="Sapaan Bartender & Panduan Buku Menu"),
         BotCommand(command="menu", description="Buka Buku Menu & Jukebox Interaktif"),
     ]
+
     await bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
+    if GROUP_ID:
+        try:
+            await bot.set_my_commands(group_cmds, scope=BotCommandScopeChat(chat_id=GROUP_ID))
+        except Exception as e:
+            logging.warning("Gagal set command scope chat GROUP_ID: %s", e)
+
     await bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
 
     if WEBAPP_DIRECT_URL.startswith("https://") and not WEBAPP_DIRECT_URL.startswith("https://t.me/"):
