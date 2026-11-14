@@ -20,6 +20,378 @@ hans_bot = Bot(token=cfg.TOKEN_HANS)
 
 WEBAPP_HTML_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "webapp", "index.html")
 
+EMBEDDED_HTML = """<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>The Velvet Hour — Menu, Mixology & Lounge</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      --bg: #100b0f;
+      --card: #1b1319;
+      --gold: #dfb866;
+      --gold-dim: rgba(223, 184, 102, 0.28);
+      --cream: #f5efe6;
+      --muted: #a69c95;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    body { background: #100b0f; color: #f5efe6; padding-bottom: 90px; min-height: 100vh; }
+
+    header {
+      background: linear-gradient(180deg, #2b121b 0%, #100b0f 100%);
+      padding: 16px 16px 10px;
+      border-bottom: 1px solid var(--gold-dim);
+      position: sticky; top: 0; z-index: 10;
+    }
+    .brand { font-size: 10px; letter-spacing: 2px; color: var(--gold); font-weight: 700; }
+    .title-row { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
+    h1 { font-size: 19px; font-weight: 700; color: #f5efe6; }
+    .badge-vc {
+      background: rgba(223, 184, 102, 0.16);
+      border: 1px solid var(--gold);
+      color: var(--gold);
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .tabs {
+      display: flex; gap: 6px; padding: 10px 12px; overflow-x: auto;
+      background: #100b0f; position: sticky; top: 64px; z-index: 9;
+    }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab {
+      flex: 0 0 auto; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--gold-dim);
+      background: var(--card); color: var(--muted); font-size: 12px; font-weight: 600;
+      cursor: pointer;
+    }
+    .tab.active {
+      background: linear-gradient(135deg, #4b1725, #29141d);
+      border-color: var(--gold); color: var(--gold);
+    }
+
+    .section { display: none; padding: 4px 16px; }
+    .section.active { display: block; }
+    .sub-title {
+      font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px;
+      color: var(--gold); margin: 14px 0 8px; font-weight: 700;
+    }
+
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .item-card {
+      background: var(--card); border: 1px solid var(--gold-dim);
+      border-radius: 14px; padding: 12px; display: flex; flex-direction: column;
+      justify-content: space-between;
+    }
+    .item-card.vip { border-color: rgba(223, 184, 102, 0.65); background: linear-gradient(160deg, #241914, #181116); }
+    .item-emoji { font-size: 24px; margin-bottom: 6px; }
+    .item-name { font-size: 13px; font-weight: 700; margin-bottom: 3px; color: #f5efe6; }
+    .item-desc { font-size: 11px; color: var(--muted); line-height: 1.35; margin-bottom: 10px; }
+    .item-footer { display: flex; justify-content: space-between; align-items: center; }
+    .price { font-size: 11px; font-weight: 700; color: var(--gold); }
+
+    .btn-order {
+      background: var(--gold); color: #140f0b; border: none; border-radius: 8px;
+      padding: 6px 11px; font-size: 11px; font-weight: 700; cursor: pointer;
+    }
+
+    .box-panel {
+      background: var(--card); border: 1px solid var(--gold-dim);
+      border-radius: 14px; padding: 14px; margin-top: 10px;
+    }
+    label { display: block; font-size: 12px; color: var(--gold); font-weight: 600; margin: 10px 0 6px; }
+    select, .input-field {
+      width: 100%; background: #100b0f; border: 1px solid var(--gold-dim);
+      color: #f5efe6; padding: 11px; border-radius: 10px; font-size: 13px;
+      outline: none;
+    }
+    .btn-full {
+      width: 100%; background: linear-gradient(135deg, #dfb866, #b88c38);
+      color: #140f0b; border: none; padding: 12px; border-radius: 10px;
+      font-size: 13px; font-weight: 800; cursor: pointer; margin-top: 14px;
+    }
+
+    .toast {
+      position: fixed; bottom: 20px; left: 16px; right: 16px;
+      background: #23181e; border: 1px solid var(--gold); color: #f5efe6;
+      padding: 12px 14px; border-radius: 12px; font-size: 13px; text-align: center;
+      display: none; z-index: 99; box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">THE VELVET HOUR  •  LOUNGE CONCIERGE</div>
+    <div class="title-row">
+      <h1 id="guest-name">Selamat Malam</h1>
+      <div class="badge-vc" id="guest-balance">50 VC</div>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('drinks', this)">🍸 Minuman</div>
+    <div class="tab" onclick="switchTab('mixology', this)">🧪 Racik Koktail</div>
+    <div class="tab" onclick="switchTab('food', this)">🍽️ Hidangan</div>
+    <div class="tab" onclick="switchTab('lapak', this)">🏪 Lapak</div>
+    <div class="tab" onclick="switchTab('music', this)">🎶 Jukebox</div>
+  </div>
+
+  <div id="tab-drinks" class="section active">
+    <div class="sub-title">Signature & Classic Drinks (Gratis)</div>
+    <div class="grid" id="grid-drinks-reg"></div>
+    <div class="sub-title">✨ VIP Reserve Cellar (Gratis VIP / 15 VC)</div>
+    <div class="grid" id="grid-drinks-vip"></div>
+  </div>
+
+  <div id="tab-mixology" class="section">
+    <div class="box-panel">
+      <div style="font-size: 15px; font-weight: 700; color: var(--gold);">🧪 Custom Mixology Bar</div>
+      <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">
+        Pilih bahan racikanmu sendiri—Julian akan mengocoknya langsung di meja bar grup (Biaya: <b>10 VC</b>, Gratis VIP).
+      </div>
+
+      <label>1. Dasar Minuman (Base)</label>
+      <select id="mix-base">
+        <option value="Aged Bourbon Whisky">🥃 Aged Bourbon Whisky</option>
+        <option value="Botanical London Gin">🍸 Botanical London Gin</option>
+        <option value="Silver Agave Tequila">🌵 Silver Agave Tequila</option>
+        <option value="Dark Spiced Rum">🏴‍☠️ Dark Spiced Rum</option>
+        <option value="Sparkling Non-Alcoholic Tonic">🫧 Sparkling Tonic (Non-Alkohol)</option>
+      </select>
+
+      <label>2. Campuran Rasa (Mixer & Syrup)</label>
+      <select id="mix-syrup">
+        <option value="Blood Orange & Bitters">🍊 Blood Orange & Aromatic Bitters</option>
+        <option value="Velvet Rose & Lychee">🌹 Velvet Rose & Lychee Nectar</option>
+        <option value="Smoked Honey & Espresso">☕ Smoked Honey & Cold Espresso</option>
+        <option value="Crushed Mint & Yuzu Lime">🌿 Crushed Mint & Yuzu Lime</option>
+      </select>
+
+      <label>3. Hiasan Gelas (Garnish)</label>
+      <select id="mix-garnish">
+        <option value="Kulit Jeruk Bakar">🔥 Kulit Jeruk Bakar (Torched Peel)</option>
+        <option value="Batang Kayu Manis Asap">🪵 Batang Kayu Manis Asap</option>
+        <option value="Kelopak Mawar Merah">🥀 Kelopak Mawar Merah</option>
+        <option value="Ceri Hitam Maraschino">🍒 Ceri Hitam Maraschino</option>
+      </select>
+
+      <label>4. Beri Nama Koktailmu (Opsional)</label>
+      <input type="text" id="mix-name" class="input-field" placeholder="Contoh: Midnight Crimson" maxlength="32" />
+
+      <button class="btn-full" onclick="submitCustomMix()">🍸 Minta Julian Racik Sekarang</button>
+    </div>
+  </div>
+
+  <div id="tab-food" class="section">
+    <div class="sub-title">Midnight Kitchen (Gratis)</div>
+    <div class="grid" id="grid-food-reg"></div>
+    <div class="sub-title">✨ Chef's VIP Gastronomy (Gratis VIP / 15 VC)</div>
+    <div class="grid" id="grid-food-vip"></div>
+  </div>
+
+  <div id="tab-lapak" class="section">
+    <div class="sub-title">🏪 Etalase Item Lapak Partner Aktif</div>
+    <div class="grid" id="grid-lapak">
+      <div style="color: var(--muted); font-size: 12px;">Memuat katalog lapak...</div>
+    </div>
+  </div>
+
+  <div id="tab-music" class="section">
+    <div class="box-panel">
+      <div style="font-size: 15px; font-weight: 700; color: var(--gold);">🎧 Request Lagu ke Kaelen DJ</div>
+      <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">
+        Lagu langsung masuk antrean & diumumkan Kaelen di grup (Biaya: <b>10 VC</b>, Gratis VIP).
+      </div>
+      <input type="text" id="song-input" class="input-field" style="margin-top: 12px;" placeholder="Contoh: Apocalypse - Cigarettes After Sex" />
+      <button class="btn-full" onclick="submitSong()">🎶 Putar di Ruang Utama</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    const tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+    }
+
+    const MENUS = {
+      drinksReg: [
+        { code: "negroni", emoji: "🥃", name: "Classic Negroni", desc: "Gin, Campari & sweet vermouth.", price: 0 },
+        { code: "whisky", emoji: "🧊", name: "Smoked Whisky", desc: "Bourbon dengan es batu kristal.", price: 0 },
+        { code: "mojito", emoji: "🌿", name: "Velvet Mojito", desc: "Daun mint, lime & soda dingin.", price: 0 },
+        { code: "espresso", emoji: "☕", name: "Double Espresso", desc: "Kopi panggang gelap pekat.", price: 0 },
+        { code: "latte", emoji: "🥛", name: "Caramel Latte", desc: "Espresso lembut & karamel.", price: 0 },
+        { code: "mocktail", emoji: "🍹", name: "Crimson Sunset", desc: "Delima, cranberry & tonic segar.", price: 0 },
+      ],
+      drinksVip: [
+        { code: "vip_dom", emoji: "🍾", name: "Dom Pérignon Vintage", desc: "Sampanye Prancis eksklusif.", price: 15, vip: true },
+        { code: "vip_blue", emoji: "💎", name: "Blue Label Reserve", desc: "Scotch langka aroma kayu ek.", price: 15, vip: true },
+        { code: "vip_absinthe", emoji: "🧪", name: "Emerald Absinthe", desc: "Gula karamel terbakar.", price: 15, vip: true },
+        { code: "vip_royal", emoji: "👑", name: "Velvet Royal Martini", desc: "Vodka dengan edible gold leaf.", price: 15, vip: true },
+      ],
+      foodReg: [
+        { code: "steak", emoji: "🥩", name: "Ribeye Steak", desc: "Medium-rare saus lada hitam.", price: 0 },
+        { code: "pasta", emoji: "🍝", name: "Truffle Carbonara", desc: "Spaghetti jamur truffle & keju.", price: 0 },
+        { code: "fries", emoji: "🍟", name: "Truffle Fries", desc: "Kentang renyah tabur parmesan.", price: 0 },
+        { code: "platter", emoji: "🧀", name: "Charcuterie Board", desc: "Keju artisan, buah & crackers.", price: 0 },
+        { code: "tiramisu", emoji: "🍰", name: "Espresso Tiramisu", desc: "Krim mascarpone klasik Italia.", price: 0 },
+        { code: "croissant", emoji: "🥐", name: "Butter Croissant", desc: "Pastry hangat mentega Prancis.", price: 0 },
+      ],
+      foodVip: [
+        { code: "vip_a5", emoji: "🥩", name: "Miyazaki Wagyu A5", desc: "Wagyu Jepang lumer di mulut.", price: 15, vip: true },
+        { code: "vip_caviar", emoji: "🥄", name: "Beluga Caviar", desc: "Kaviar hitam & krim asam.", price: 15, vip: true },
+        { code: "vip_lobster", emoji: "🦞", name: "Poached Lobster", desc: "Lobster panggang mentega.", price: 15, vip: true },
+        { code: "vip_gold", emoji: "🍫", name: "24K Gold Truffle", desc: "Ganache hitam lapis emas.", price: 15, vip: true },
+      ]
+    };
+
+    let isVipUser = false;
+
+    function showToast(msg) {
+      const t = document.getElementById("toast");
+      t.innerText = msg;
+      t.style.display = "block";
+      setTimeout(() => { t.style.display = "none"; }, 3500);
+    }
+
+    function renderGrid(list, containerId, category) {
+      const box = document.getElementById(containerId);
+      box.innerHTML = list.map(item => {
+        const priceLabel = item.price === 0 ? "Gratis" : (isVipUser ? "Gratis (VIP)" : `${item.price} VC`);
+        return `
+          <div class="item-card ${item.vip ? 'vip' : ''}">
+            <div>
+              <div class="item-emoji">${item.emoji}</div>
+              <div class="item-name">${item.name}</div>
+              <div class="item-desc">${item.desc}</div>
+            </div>
+            <div class="item-footer">
+              <span class="price">${priceLabel}</span>
+              <button class="btn-order" onclick="placeOrder('${category}', '${item.code}', '${item.name}', ${item.price})">Pesan</button>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderAllMenus() {
+      renderGrid(MENUS.drinksReg, "grid-drinks-reg", "drink");
+      renderGrid(MENUS.drinksVip, "grid-drinks-vip", "drink");
+      renderGrid(MENUS.foodReg, "grid-food-reg", "food");
+      renderGrid(MENUS.foodVip, "grid-food-vip", "food");
+    }
+
+    function switchTab(tabName, el) {
+      document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+      document.querySelectorAll(".section").forEach(s => s.classList.remove("active"));
+      el.classList.add("active");
+      document.getElementById("tab-" + tabName).classList.add("active");
+    }
+
+    async function loadUserProfile() {
+      if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+        document.getElementById("guest-name").innerText = tg.initDataUnsafe.user.first_name;
+      }
+      try {
+        const res = await fetch("/api/me", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ initData: tg ? tg.initData : "" })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          isVipUser = data.is_vip;
+          document.getElementById("guest-balance").innerText = `${data.coins} VC ${data.is_vip ? '• VIP' : ''}`;
+          renderAllMenus();
+          renderLapak(data.shop_items || []);
+        }
+      } catch (e) {
+        renderAllMenus();
+      }
+    }
+
+    function renderLapak(items) {
+      const box = document.getElementById("grid-lapak");
+      if (!items.length) {
+        box.innerHTML = `<div style="color: var(--muted); font-size: 12px; grid-column: 1 / -1;">Belum ada item dijual di lapak partner saat ini.</div>`;
+        return;
+      }
+      box.innerHTML = items.map(it => `
+        <div class="item-card">
+          <div>
+            <div class="item-emoji">🛍️</div>
+            <div class="item-name">${it.title}</div>
+            <div class="item-desc">Toko: ${it.shop_name}</div>
+          </div>
+          <div class="item-footer">
+            <span class="price">${it.price_vc} VC</span>
+            <button class="btn-order" onclick="buyLapakItem(${it.id}, '${it.title.replace(/'/g, "\\'")}', ${it.price_vc})">Beli</button>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    async function buyLapakItem(itemId, title, price) {
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("medium");
+      showToast(`Membeli ${title}...`);
+      const res = await fetch("/api/order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initData: tg ? tg.initData : "", category: "lapak", item_id: itemId, item_name: title, price: price })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showToast("✅ Berhasil dibeli! Cek nota pembelian di PC Hans.");
+        if (tg) setTimeout(() => tg.close(), 1000);
+      } else {
+        showToast("⚠️ " + (data.error || "Gagal membeli item."));
+      }
+    }
+
+    async function placeOrder(category, code, itemName, price) {
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("medium");
+      showToast(`Julian sedang meracik ${itemName}...`);
+      const res = await fetch("/api/order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initData: tg ? tg.initData : "", category, code, item_name: itemName, price })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        document.getElementById("guest-balance").innerText = `${data.new_coins} VC ${isVipUser ? '• VIP' : ''}`;
+        showToast("✅ Pesanan dikirim ke meja bar grup!");
+        if (tg) setTimeout(() => tg.close(), 800);
+      } else {
+        showToast("⚠️ " + (data.error || "Gagal memesan."));
+      }
+    }
+
+    async function submitCustomMix() {
+      const base = document.getElementById("mix-base").value;
+      const syrup = document.getElementById("mix-syrup").value;
+      const garnish = document.getElementById("mix-garnish").value;
+      const customName = document.getElementById("mix-name").value.trim() || "Velvet Custom Signature";
+      const fullLabel = `${customName} (${base} + ${syrup}, garnish ${garnish})`;
+      await placeOrder("custom_mix", "mix", fullLabel, 10);
+    }
+
+    async function submitSong() {
+      const song = document.getElementById("song-input").value.trim();
+      if (song.length < 3) return showToast("⚠️ Ketik judul lagu terlebih dahulu.");
+      await placeOrder("song", "reqsong", song, 10);
+    }
+
+    renderAllMenus();
+    loadUserProfile();
+  </script>
+</body>
+</html>"""
+
 
 def _verify_telegram_init_data(init_data: str, bot_token: str) -> dict | None:
     try:
@@ -47,7 +419,6 @@ def _authenticate_user(init_data: str) -> dict | None:
 
 
 async def _serve_with_bartender_animation(category: str, mention: str, item_name: str, is_vip: bool):
-    """Animasi bartending bertahap di grup utama agar terasa hidup."""
     vip_tag = " 👑 <i>(VIP Reserve)</i>" if is_vip else ""
     try:
         await julian_bot.send_chat_action(cfg.GROUP_ID, ChatAction.TYPING)
@@ -62,7 +433,7 @@ async def _serve_with_bartender_animation(category: str, mention: str, item_name
         )
         await asyncio.sleep(1.3)
         await msg.edit_text(
-            f"🍸 <i>Julian mengocok shaker dengan ritme presisi lalu menuangkannya perlahan...</i>",
+            "🍸 <i>Julian mengocok shaker dengan ritme presisi lalu menuangkannya perlahan...</i>",
             parse_mode=ParseMode.HTML,
         )
         await asyncio.sleep(1.3)
@@ -90,8 +461,10 @@ async def _serve_with_bartender_animation(category: str, mention: str, item_name
 
 
 async def handle_index(request: web.Request) -> web.Response:
-    with open(WEBAPP_HTML_PATH, "r", encoding="utf-8") as f:
-        return web.Response(text=f.read(), content_type="text/html")
+    if os.path.exists(WEBAPP_HTML_PATH):
+        with open(WEBAPP_HTML_PATH, "r", encoding="utf-8") as f:
+            return web.Response(text=f.read(), content_type="text/html")
+    return web.Response(text=EMBEDDED_HTML, content_type="text/html")
 
 
 async def handle_api_me(request: web.Request) -> web.Response:
@@ -131,7 +504,6 @@ async def handle_api_order(request: web.Request) -> web.Response:
     mention = f'<a href="tg://user?id={uid}">{first_name}</a>'
     category = body.get("category", "drink")
 
-    # PEMBELIAN ITEM LAPAK PARTNER LANGSUNG DARI MINI APP
     if category == "lapak":
         item_id = int(body.get("item_id", 0))
         async with db.pool.acquire() as conn:
@@ -172,7 +544,6 @@ async def handle_api_order(request: web.Request) -> web.Response:
             pass
         return web.json_response({"ok": True, "new_coins": new_coins})
 
-    # PESANAN BAR, CUSTOM MIXOLOGY, & JUKEBOX
     item_name = html.escape(str(body.get("item_name", "Menu"))[:100])
     base_price = int(body.get("price", 0))
 
