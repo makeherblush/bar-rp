@@ -29,6 +29,11 @@ OWNER_ID = cfg.OWNER_ID
 GROUP_ID = cfg.GROUP_ID
 MINIAPP_MENU_URL = "https://t.me/JulianVanceVH_bot/menu"
 
+DEFAULT_SERVICE_GIFS = {
+    "drink": "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExbGZ4eG9yNnR5bW5wZ3J6b2R4Y2Y1bTZ2Y2F2eG9yNnR5bW5wZ3J6eiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/l41lJ8ywG1ncm9FXW/giphy.gif",
+    "food": "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExd2J4cW12bG14Y2Y1bTZ2Y2F2eG9yNnR5bW5wZ3J6b2R4Y2Y1bTZ2eiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3o7TKP9ln2Dr6ze6f6/giphy.gif",
+}
+
 DRINKS_CATALOG = {
     "espresso": ("Double Espresso", 0, False),
     "latte": ("Caramel Latte", 0, False),
@@ -58,8 +63,6 @@ FOODS_CATALOG = {
     "vip_gold": ("24K Gold Dark Truffle", 15, True),
 }
 
-# --- KATALOG HADIAH MEWAH (/gift) ---
-# Format: kode -> dict(name, emoji, price, charm, special, default_img, desc)
 GIFTS_CATALOG = {
     "rose": {
         "name": "Single Velvet Rose",
@@ -124,7 +127,6 @@ GIFTS_CATALOG = {
         "default_img": "https://images.unsplash.com/photo-1514362545857-3bc16c4c7d1b?w=800&q=80",
         "desc": "Menara gelas kristal dengan tuangan sampanye vintage.",
     },
-    # --- HADIAH ISTIMEWA (AUTO-PIN DI GRUP & KIRIM KE CHANNEL) ---
     "ring": {
         "name": "Velvet Crimson Diamond Ring",
         "emoji": "💍",
@@ -194,7 +196,6 @@ async def react_msg(chat_id: int, message_id: int, emoji: str = "🥂"):
 
 
 async def _schedule_delete(chat_id: int, message_ids: list[int], delay: int = 45):
-    """Hapus pesan otomatis setelah sekian detik agar chat grup tidak menumpuk."""
     async def _worker():
         await asyncio.sleep(delay)
         for mid in message_ids:
@@ -218,11 +219,13 @@ async def ensure_julian_schema():
                 is_vip BOOLEAN DEFAULT FALSE,
                 vip_until TIMESTAMP WITHOUT TIME ZONE,
                 vip_booth_name TEXT,
+                last_thread_id BIGINT,
                 is_admin BOOLEAN DEFAULT FALSE
             );
         """)
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS charm_points INTEGER DEFAULT 0;")
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS vip_booth_name TEXT;")
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_thread_id BIGINT;")
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS bar_settings (
                 key TEXT PRIMARY KEY,
@@ -277,28 +280,29 @@ async def _set_setting(key: str, value: str):
         """, key, value)
 
 
-async def _sync_tg_user(conn, tg_user: types.User):
+async def _sync_tg_user(conn, tg_user: types.User, thread_id: int | None = None):
     if not tg_user or tg_user.is_bot:
         return
     await conn.execute("""
-        INSERT INTO users (user_id, username, full_name, coins, charm_points)
-        VALUES ($1, $2, $3, 50, 0)
+        INSERT INTO users (user_id, username, full_name, coins, charm_points, last_thread_id)
+        VALUES ($1, $2, $3, 50, 0, $4)
         ON CONFLICT (user_id) DO UPDATE SET
             username = COALESCE(EXCLUDED.username, users.username),
-            full_name = EXCLUDED.full_name;
-    """, tg_user.id, tg_user.username, tg_user.full_name)
+            full_name = EXCLUDED.full_name,
+            last_thread_id = COALESCE($4, users.last_thread_id);
+    """, tg_user.id, tg_user.username, tg_user.full_name, thread_id)
 
 
 async def _resolve_target_smart(conn, message: types.Message, ident: str | None = None):
     if message.reply_to_message and message.reply_to_message.from_user and not message.reply_to_message.from_user.is_bot:
         ru = message.reply_to_message.from_user
-        await _sync_tg_user(conn, ru)
+        await _sync_tg_user(conn, ru, message.message_thread_id)
         return await conn.fetchrow("SELECT user_id, username, full_name, coins, charm_points FROM users WHERE user_id = $1", ru.id)
 
     if message.entities:
         for ent in message.entities:
             if ent.type == "text_mention" and ent.user and not ent.user.is_bot:
-                await _sync_tg_user(conn, ent.user)
+                await _sync_tg_user(conn, ent.user, message.message_thread_id)
                 return await conn.fetchrow("SELECT user_id, username, full_name, coins, charm_points FROM users WHERE user_id = $1", ent.user.id)
 
     if not ident:
@@ -337,7 +341,49 @@ def miniapp_menu_kb() -> InlineKeyboardMarkup:
     ])
 
 
-# --- KONFIGURASI MEDIA GIFT & CHANNEL HADIAH ISTIMEWA (OWNER) ---
+async def _get_service_media(category: str) -> tuple[str, str]:
+    key = f"menu_{category}"
+    async with db.pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT file_id, media_type FROM gift_custom_media WHERE gift_code = $1", key)
+        if row:
+            return row["file_id"], row["media_type"]
+    return DEFAULT_SERVICE_GIFS.get(category, DEFAULT_SERVICE_GIFS["drink"]), "animation"
+
+
+# --- KONFIGURASI MEDIA GIF/FOTO MENU & GIFT (OWNER) ---
+@dp.message(Command("setmenumedia"))
+async def cmd_set_menu_media(message: types.Message):
+    if message.from_user.id != OWNER_ID:
+        return
+    valid = {"drink", "custom_mix", "food", "song"}
+    parts = (message.text or "").split()
+    if len(parts) < 2 or parts[1].lower() not in valid:
+        return await message.reply(
+            "Reply GIF atau Foto dengan perintah:\n<code>/setmenumedia <kategori></code>\n\n"
+            "Kategori tersedia: <code>drink</code>, <code>custom_mix</code>, <code>food</code>, <code>song</code>",
+            parse_mode=ParseMode.HTML,
+        )
+
+    rep = message.reply_to_message
+    if not rep or (not rep.photo and not rep.animation):
+        return await message.reply("⚠️ Harap <b>reply</b> pesan berisi GIF atau Foto.", parse_mode=ParseMode.HTML)
+
+    cat = parts[1].lower()
+    if rep.animation:
+        file_id, mtype = rep.animation.file_id, "animation"
+    else:
+        file_id, mtype = rep.photo[-1].file_id, "photo"
+
+    async with db.pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO gift_custom_media (gift_code, file_id, media_type)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (gift_code) DO UPDATE SET file_id = EXCLUDED.file_id, media_type = EXCLUDED.media_type;
+        """, f"menu_{cat}", file_id, mtype)
+
+    await message.reply(f"✅ Animasi/gambar layanan <code>{cat}</code> berhasil diperbarui!", parse_mode=ParseMode.HTML)
+
+
 @dp.message(Command("setgiftimg"))
 async def cmd_set_gift_image(message: types.Message):
     if message.from_user.id != OWNER_ID:
@@ -402,7 +448,6 @@ async def cmd_send_gift(message: types.Message):
     parts = (message.text or "").split()
     has_reply = bool(message.reply_to_message and message.reply_to_message.from_user and not message.reply_to_message.from_user.is_bot)
 
-    # Tampilkan daftar katalog jika argumen kurang (auto-delete 45 detik agar chat bersih)
     if (has_reply and len(parts) < 2) or (not has_reply and len(parts) < 3):
         reg_lines = []
         sp_lines = []
@@ -414,7 +459,8 @@ async def cmd_send_gift(message: types.Message):
                 reg_lines.append(line)
 
         catalog_text = (
-            "🎁 <b>VELVET LUXURY GIFT BOUTIQUE</b>\n\n"
+            "🎁 <b>VELVET LUXURY GIFT BOUTIQUE</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
             "<b>Koleksi Reguler & Premium</b> <i>(Auto-hapus 45 dtk)</i>:\n"
             + "\n".join(reg_lines)
             + "\n\n👑 <b>Koleksi Istimewa</b> <i>(Auto-Pin Grup & Hall of Fame Channel)</i>:\n"
@@ -451,7 +497,7 @@ async def cmd_send_gift(message: types.Message):
 
     async with db.pool.acquire() as conn:
         async with conn.transaction():
-            await _sync_tg_user(conn, sender)
+            await _sync_tg_user(conn, sender, message.message_thread_id)
             target = await _resolve_target_smart(conn, message, target_ident)
             if not target:
                 err_msg = await message.reply(
@@ -490,7 +536,7 @@ async def cmd_send_gift(message: types.Message):
 
     await react_msg(message.chat.id, message.message_id, gift["emoji"])
 
-    tier_badge = "👑 <b>ROYAL SPECIAL GIFT — THE VELVET HOUR</b>" if is_special else "🎁 <b>LUXURY GIFT DELIVERY — THE VELVET HOUR</b>"
+    tier_badge = "👑 <b>ROYAL SPECIAL GIFT  •  THE VELVET HOUR</b>" if is_special else "🎁 <b>LUXURY GIFT DELIVERY  •  THE VELVET HOUR</b>"
     note_block = f"\n💌 <i>\"{html.escape(custom_note)}\"</i>" if custom_note else ""
     footer_note = (
         "\n\n📌 <i>Hadiah istimewa ini diabadikan di pin grup & Hall of Fame.</i>"
@@ -499,16 +545,18 @@ async def cmd_send_gift(message: types.Message):
     )
 
     caption = (
-        f"{tier_badge}\n\n"
+        f"{tier_badge}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"{gift['emoji']} <b>{gift['name']}</b>\n"
         f"<i>{gift['desc']}</i>\n\n"
-        f"• <b>Dari:</b> {_mention(sender.id, sender.first_name)}\n"
+        f"<blockquote>• <b>Dari:</b> {_mention(sender.id, sender.first_name)}\n"
         f"• <b>Untuk:</b> {_mention(target['user_id'], target['full_name'])}\n"
-        f"• <b>Pesona Penerima:</b> <b>+{charm_gain} Charm ✨</b>"
+        f"• <b>Pesona Penerima:</b> <b>+{charm_gain} Charm ✨</b></blockquote>"
         f"{note_block}"
         f"{footer_note}"
     )
 
+    send_kwargs = {"message_thread_id": message.message_thread_id} if message.message_thread_id else {}
     sent_msg = None
     try:
         if custom_media and custom_media["media_type"] == "animation":
@@ -517,6 +565,7 @@ async def cmd_send_gift(message: types.Message):
                 animation=custom_media["file_id"],
                 caption=caption,
                 parse_mode=ParseMode.HTML,
+                **send_kwargs,
             )
         else:
             media_source = custom_media["file_id"] if custom_media else gift["default_img"]
@@ -525,19 +574,19 @@ async def cmd_send_gift(message: types.Message):
                 photo=media_source,
                 caption=caption,
                 parse_mode=ParseMode.HTML,
+                **send_kwargs,
             )
     except Exception:
         sent_msg = await bot.send_message(
             chat_id=message.chat.id,
             text=caption,
             parse_mode=ParseMode.HTML,
+            **send_kwargs,
         )
 
-    # Hapus pesan perintah /gift dari user agar chat selalu rapi
     await _schedule_delete(message.chat.id, [message.message_id], delay=5)
 
     if is_special and sent_msg:
-        # 1. Auto-Pin di grup untuk hadiah istimewa
         try:
             await bot.pin_chat_message(
                 chat_id=message.chat.id,
@@ -547,15 +596,15 @@ async def cmd_send_gift(message: types.Message):
         except Exception:
             pass
 
-        # 2. Kirim ke Channel Hall of Fame jika sudah diatur
         ch_id_raw = await _get_setting("gift_channel_id") or getattr(cfg, "GIFT_CHANNEL_ID", None)
         if ch_id_raw:
             ch_caption = (
-                f"👑 <b>VELVET HALL OF FAME — SPECIAL TRIBUTE</b>\n\n"
-                f"{gift['emoji']} <b>{gift['name']}</b> (<b>{cost} VC</b>)\n"
-                f"• <b>Pengirim:</b> {_mention(sender.id, sender.first_name)}\n"
+                f"👑 <b>VELVET HALL OF FAME  •  SPECIAL TRIBUTE</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"{gift['emoji']} <b>{gift['name']}</b> (<b>{cost} VC</b>)\n\n"
+                f"<blockquote>• <b>Pengirim:</b> {_mention(sender.id, sender.first_name)}\n"
                 f"• <b>Penerima:</b> {_mention(target['user_id'], target['full_name'])}\n"
-                f"• <b>Bonus Charm:</b> <b>+{charm_gain} ✨</b>"
+                f"• <b>Bonus Charm:</b> <b>+{charm_gain} ✨</b></blockquote>"
                 f"{note_block}"
             )
             try:
@@ -571,7 +620,6 @@ async def cmd_send_gift(message: types.Message):
                 except Exception:
                     pass
     elif sent_msg:
-        # Auto-delete hadiah reguler & premium setelah 45 detik
         await _schedule_delete(message.chat.id, [sent_msg.message_id], delay=45)
 
 
@@ -579,11 +627,13 @@ async def cmd_send_gift(message: types.Message):
 @dp.message(Command("menu"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_menu_miniapp(message: types.Message):
     async with db.pool.acquire() as conn:
-        await _sync_tg_user(conn, message.from_user)
+        await _sync_tg_user(conn, message.from_user, message.message_thread_id)
     await react_msg(message.chat.id, message.message_id, "🥂")
     msg = await message.reply(
-        "🥂 <i>Julian meletakkan tablet menu beludru di atas meja bar.</i>\n"
-        "Pilih minuman, racik koktail sendiri, hidangan dapur, atau request lagu jukebox melalui tombol di bawah:",
+        "🥂 <b>THE VELVET HOUR  •  LOUNGE TABLET</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "<i>Julian meletakkan tablet menu beludru di atas meja bar.</i>\n"
+        "Pilih minuman, racik koktail sendiri, hidangan dapur, atau lagu jukebox melalui tombol di bawah:",
         parse_mode=ParseMode.HTML,
         reply_markup=miniapp_menu_kb(),
     )
@@ -594,13 +644,15 @@ async def cmd_menu_miniapp(message: types.Message):
 async def cmd_order_drink(message: types.Message):
     user = message.from_user
     async with db.pool.acquire() as conn:
-        await _sync_tg_user(conn, user)
+        await _sync_tg_user(conn, user, message.message_thread_id)
 
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
         await react_msg(message.chat.id, message.message_id, "🍸")
         msg = await message.reply(
-            "🍸 <i>Julian menyodorkan kartu menu digital ke hadapanmu.</i>\n"
+            "🍸 <b>THE VELVET HOUR  •  DRINKS MENU</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "<i>Julian menyodorkan kartu menu digital ke hadapanmu.</i>\n"
             "Silakan pilih minuman atau racik koktail sendiri lewat Mini App di bawah ini:",
             parse_mode=ParseMode.HTML,
             reply_markup=miniapp_menu_kb(),
@@ -635,42 +687,55 @@ async def cmd_order_drink(message: types.Message):
             await _add_bar_quest(conn, user.id)
 
     await react_msg(message.chat.id, message.message_id, "🍸")
+    send_kwargs = {"message_thread_id": message.message_thread_id} if message.message_thread_id else {}
     try:
-        await bot.send_chat_action(message.chat.id, "typing")
+        await bot.send_chat_action(message.chat.id, "typing", **send_kwargs)
     except Exception:
         pass
 
-    vip_note = " 👑 <i>(VIP Reserve)</i>" if is_vip_item else ""
-    step_msg = await message.reply(
-        f"🧊 <i>Julian menyiapkan gelas kristal dingin untuk {_mention(user.id, user.first_name)}...</i>",
+    prep_msg = await message.reply(
+        f"🧊 <i>Julian menyiapkan gelas kristal dingin dan mengocok shaker untuk {_mention(user.id, user.first_name)}...</i>",
         parse_mode=ParseMode.HTML,
     )
-    await asyncio.sleep(1.2)
-    await step_msg.edit_text(
-        "🍸 <i>Julian mengocok shaker dengan presisi dan menuangkannya perlahan...</i>",
-        parse_mode=ParseMode.HTML,
-    )
-    await asyncio.sleep(1.2)
-    await step_msg.edit_text(
-        f"🍸 <b>JULIAN — BARTENDER SERVICE</b>\n\n"
-        f"<i>Julian menggeser gelas di atas meja bar mahoni menuju {_mention(user.id, user.first_name)}{vip_note}.</i>\n"
+    await asyncio.sleep(1.5)
+    try:
+        await prep_msg.delete()
+    except Exception:
+        pass
+
+    vip_badge = "  •  👑 <b>VIP RESERVE</b>" if (is_vip_item or is_vip) else ""
+    caption = (
+        f"🍸 <b>BARTENDER SERVICE  •  JULIAN</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"<i>Julian menggeser gelas kristal di atas meja bar mahoni menuju meja tamu.</i>\n\n"
+        f"<blockquote>• <b>Tamu:</b> {_mention(user.id, user.first_name)}{vip_badge}\n"
         f"• <b>Pesanan:</b> <b>{item_name}</b>\n"
-        f"<i>\"Silakan dinikmati malam ini.\"</i>",
-        parse_mode=ParseMode.HTML,
+        f"• <b>Kategori:</b> Bar & Cellar Selection</blockquote>\n\n"
+        f"🥂 <i>\"Silakan dinikmati malam ini.\"</i>"
     )
+    media_src, mtype = await _get_service_media("drink")
+    try:
+        if mtype == "photo":
+            await bot.send_photo(message.chat.id, photo=media_src, caption=caption, parse_mode=ParseMode.HTML, **send_kwargs)
+        else:
+            await bot.send_animation(message.chat.id, animation=media_src, caption=caption, parse_mode=ParseMode.HTML, **send_kwargs)
+    except Exception:
+        await bot.send_message(message.chat.id, caption, parse_mode=ParseMode.HTML, **send_kwargs)
 
 
 @dp.message(Command("eat"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_eat_food(message: types.Message):
     user = message.from_user
     async with db.pool.acquire() as conn:
-        await _sync_tg_user(conn, user)
+        await _sync_tg_user(conn, user, message.message_thread_id)
 
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
         await react_msg(message.chat.id, message.message_id, "🍽️")
         msg = await message.reply(
-            "🍽️ <i>Julian membukakan daftar hidangan dapur malam ini.</i>\n"
+            "🍽️ <b>THE VELVET HOUR  •  MIDNIGHT KITCHEN</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "<i>Julian membukakan daftar hidangan dapur malam ini.</i>\n"
             "Silakan pilih menu makanan langsung lewat Mini App di bawah ini:",
             parse_mode=ParseMode.HTML,
             reply_markup=miniapp_menu_kb(),
@@ -705,23 +770,40 @@ async def cmd_eat_food(message: types.Message):
             await _add_bar_quest(conn, user.id)
 
     await react_msg(message.chat.id, message.message_id, "🍽️")
+    send_kwargs = {"message_thread_id": message.message_thread_id} if message.message_thread_id else {}
     try:
-        await bot.send_chat_action(message.chat.id, "typing")
+        await bot.send_chat_action(message.chat.id, "typing", **send_kwargs)
     except Exception:
         pass
 
-    vip_note = " 👑 <i>(VIP Gastronomy)</i>" if is_vip_item else ""
-    step_msg = await message.reply(
-        f"🔥 <i>Pesanan dapur untuk {_mention(user.id, user.first_name)} sedang disiapkan...</i>",
+    prep_msg = await message.reply(
+        f"🔥 <i>Chef di dapur sedang menata hidangan hangat untuk {_mention(user.id, user.first_name)}...</i>",
         parse_mode=ParseMode.HTML,
     )
-    await asyncio.sleep(1.5)
-    await step_msg.edit_text(
-        f"🍽️ <b>JULIAN — MIDNIGHT KITCHEN</b>\n\n"
-        f"<i>Hidangan hangat disajikan ke meja {_mention(user.id, user.first_name)}{vip_note}.</i>\n"
-        f"• <b>Hidangan:</b> <b>{item_name}</b>",
-        parse_mode=ParseMode.HTML,
+    await asyncio.sleep(1.6)
+    try:
+        await prep_msg.delete()
+    except Exception:
+        pass
+
+    vip_badge = "  •  👑 <b>VIP GASTRONOMY</b>" if (is_vip_item or is_vip) else ""
+    caption = (
+        f"🍽️ <b>MIDNIGHT KITCHEN  •  JULIAN</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"<i>Hidangan hangat baru saja keluar dari dapur dan disajikan ke meja tamu.</i>\n\n"
+        f"<blockquote>• <b>Tamu:</b> {_mention(user.id, user.first_name)}{vip_badge}\n"
+        f"• <b>Hidangan:</b> <b>{item_name}</b>\n"
+        f"• <b>Kategori:</b> Lounge Gastronomy</blockquote>\n\n"
+        f"✨ <i>\"Selamat menikmati santapan malam Anda.\"</i>"
     )
+    media_src, mtype = await _get_service_media("food")
+    try:
+        if mtype == "photo":
+            await bot.send_photo(message.chat.id, photo=media_src, caption=caption, parse_mode=ParseMode.HTML, **send_kwargs)
+        else:
+            await bot.send_animation(message.chat.id, animation=media_src, caption=caption, parse_mode=ParseMode.HTML, **send_kwargs)
+    except Exception:
+        await bot.send_message(message.chat.id, caption, parse_mode=ParseMode.HTML, **send_kwargs)
 
 
 # --- TRAKTIR TAMU (/treat @user [menu] atau reply pesan target) ---
@@ -745,7 +827,7 @@ async def cmd_treat_guest(message: types.Message):
 
     async with db.pool.acquire() as conn:
         async with conn.transaction():
-            await _sync_tg_user(conn, sender)
+            await _sync_tg_user(conn, sender, message.message_thread_id)
             target = await _resolve_target_smart(conn, message, target_ident)
             if not target:
                 return await message.reply(
@@ -767,7 +849,8 @@ async def cmd_treat_guest(message: types.Message):
 
     await react_msg(message.chat.id, message.message_id, "🥂")
     await message.reply(
-        f"🥂 <b>COMPLIMENTARY TREAT</b>\n\n"
+        f"🥂 <b>COMPLIMENTARY TREAT</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"{_mention(sender.id, sender.first_name)} mengirimkan <b>{menu_text}</b> untuk {_mention(target['user_id'], target['full_name'])}!\n"
         f"✨ <i>Pesona {_mention(target['user_id'], target['full_name'])} bertambah <b>+5 Charm</b>.</i>",
         parse_mode=ParseMode.HTML,
@@ -784,7 +867,7 @@ async def cmd_vip_booth(message: types.Message):
 
     booth_name = parts[1].strip()[:32]
     async with db.pool.acquire() as conn:
-        await _sync_tg_user(conn, user)
+        await _sync_tg_user(conn, user, message.message_thread_id)
         row = await conn.fetchrow("SELECT is_vip, vip_until FROM users WHERE user_id = $1", user.id)
         is_vip = bool(row and row["is_vip"] and row["vip_until"] and row["vip_until"] > datetime.utcnow())
         if not is_vip:
@@ -793,7 +876,8 @@ async def cmd_vip_booth(message: types.Message):
 
     await react_msg(message.chat.id, message.message_id, "👑")
     await message.reply(
-        f"🍾 <b>VIP BOOTH RESERVED</b>\n\n"
+        f"🍾 <b>VIP BOOTH RESERVED</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>Julian memasang papan nama emas di area balkon eksklusif untuk {_mention(user.id, user.first_name)}:</i>\n"
         f"• <b>Nama Booth:</b> <b>{html.escape(booth_name)}</b>",
         parse_mode=ParseMode.HTML,
@@ -807,7 +891,7 @@ async def cmd_mystery_box(message: types.Message):
     cost = 40
     async with db.pool.acquire() as conn:
         async with conn.transaction():
-            await _sync_tg_user(conn, user)
+            await _sync_tg_user(conn, user, message.message_thread_id)
             row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", user.id)
             if not row or (row["coins"] or 0) < cost:
                 return await message.reply("💸 Butuh <b>40 VC</b> untuk membuka Velvet Mystery Box.", parse_mode=ParseMode.HTML)
@@ -831,7 +915,8 @@ async def cmd_mystery_box(message: types.Message):
 
     await react_msg(message.chat.id, message.message_id, "🎁")
     await message.reply(
-        f"🎁 <b>VELVET MYSTERY BOX</b>\n\n"
+        f"🎁 <b>VELVET MYSTERY BOX</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"{_mention(user.id, user.first_name)} membuka kotak beludru hitam seharga <b>40 VC</b>...\n"
         f"✨ <b>Isi Kotak:</b> <b>{label}</b>!",
         parse_mode=ParseMode.HTML,
@@ -849,7 +934,7 @@ async def cmd_slot_machine(message: types.Message):
     user = message.from_user
     async with db.pool.acquire() as conn:
         async with conn.transaction():
-            await _sync_tg_user(conn, user)
+            await _sync_tg_user(conn, user, message.message_thread_id)
             row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", user.id)
             if not row or (row["coins"] or 0) < bet:
                 return await message.reply(f"💸 Saldo kamu kurang dari <b>{bet} VC</b> untuk memutar mesin slot.", parse_mode=ParseMode.HTML)
@@ -903,7 +988,7 @@ async def cmd_dart_challenge(message: types.Message):
 
     challenger = message.from_user
     async with db.pool.acquire() as conn:
-        await _sync_tg_user(conn, challenger)
+        await _sync_tg_user(conn, challenger, message.message_thread_id)
         target = await _resolve_target_smart(conn, message, target_ident)
         if not target or target["user_id"] == challenger.id:
             return await message.reply(
@@ -1010,7 +1095,7 @@ async def cmd_dice_duel(message: types.Message):
 
     challenger = message.from_user
     async with db.pool.acquire() as conn:
-        await _sync_tg_user(conn, challenger)
+        await _sync_tg_user(conn, challenger, message.message_thread_id)
         target = await _resolve_target_smart(conn, message, target_ident)
         if not target or target["user_id"] == challenger.id:
             return await message.reply(
@@ -1115,7 +1200,7 @@ async def cb_decline_duel(call: types.CallbackQuery):
 async def cmd_check_bill(message: types.Message):
     user = message.from_user
     async with db.pool.acquire() as conn:
-        await _sync_tg_user(conn, user)
+        await _sync_tg_user(conn, user, message.message_thread_id)
         row = await conn.fetchrow(
             "SELECT coins, charm_points, is_vip, vip_until, vip_booth_name FROM users WHERE user_id = $1",
             user.id,
@@ -1128,10 +1213,11 @@ async def cmd_check_bill(message: types.Message):
     status = f"👑 VIP Reserve (s/d {row['vip_until'].strftime('%d %b %H:%M UTC')})" if is_vip else "🥂 Reguler Guest"
     booth = f"\n• <b>VIP Booth:</b> {html.escape(row['vip_booth_name'])}" if row["vip_booth_name"] else ""
     msg = await message.reply(
-        f"🧾 <b>CATATAN TAB — {html.escape(user.first_name)}</b>\n\n"
-        f"• <b>Saldo Dompet:</b> <b>{row['coins'] or 0} VC</b>\n"
+        f"🧾 <b>CATATAN TAB  •  {html.escape(user.first_name)}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"<blockquote>• <b>Saldo Dompet:</b> <b>{row['coins'] or 0} VC</b>\n"
         f"• <b>Charm Points:</b> <b>{row['charm_points'] or 0} ✨</b>\n"
-        f"• <b>Status:</b> {status}{booth}",
+        f"• <b>Status:</b> {status}{booth}</blockquote>",
         parse_mode=ParseMode.HTML,
     )
     await _schedule_delete(message.chat.id, [message.message_id, msg.message_id], delay=45)
@@ -1146,7 +1232,8 @@ async def cmd_top_charm(message: types.Message):
         for idx, r in enumerate(rows, start=1)
     ] or ["<i>Belum ada data.</i>"]
     msg = await message.reply(
-        "✨ <b>TOP 10 MOST CHARMING GUESTS — THE VELVET HOUR</b>\n\n" + "\n".join(lines),
+        "✨ <b>TOP 10 MOST CHARMING GUESTS  •  THE VELVET HOUR</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n" + "\n".join(lines),
         parse_mode=ParseMode.HTML,
     )
     await _schedule_delete(message.chat.id, [message.message_id, msg.message_id], delay=60)
@@ -1171,7 +1258,7 @@ async def cmd_apply_shift(message: types.Message):
 
     async with db.pool.acquire() as conn:
         async with conn.transaction():
-            await _sync_tg_user(conn, user)
+            await _sync_tg_user(conn, user, message.message_thread_id)
             await conn.execute("DELETE FROM active_shifts WHERE ends_at <= $1", now)
             existing = await conn.fetchrow("SELECT role_name FROM active_shifts WHERE user_id = $1", user.id)
             if existing:
@@ -1302,7 +1389,7 @@ async def cmd_end_shift(message: types.Message):
     )
 
 
-# --- EARNING +1 VC/MENIT & AUTO-SYNC USERNAME UNTUK CHAT RP AKTIF DI GRUP ---
+# --- EARNING +1 VC/MENIT, AUTO-SYNC USERNAME & TOPIK AKTIF ---
 @dp.message(F.chat.type.in_({"group", "supergroup"}), F.text)
 async def passive_rp_coin_earner(message: types.Message):
     if not message.from_user or message.from_user.is_bot:
@@ -1319,13 +1406,14 @@ async def passive_rp_coin_earner(message: types.Message):
 
     async with db.pool.acquire() as conn:
         await conn.execute("""
-            INSERT INTO users (user_id, username, full_name, coins, charm_points)
-            VALUES ($1, $2, $3, $4, 0)
+            INSERT INTO users (user_id, username, full_name, coins, charm_points, last_thread_id)
+            VALUES ($1, $2, $3, $4, 0, $5)
             ON CONFLICT (user_id) DO UPDATE SET
                 username = COALESCE(EXCLUDED.username, users.username),
                 full_name = EXCLUDED.full_name,
-                coins = users.coins + $5;
-        """, uid, message.from_user.username, message.from_user.full_name, 50 + earn_delta, earn_delta)
+                coins = users.coins + $6,
+                last_thread_id = COALESCE($5, users.last_thread_id);
+        """, uid, message.from_user.username, message.from_user.full_name, 50 + earn_delta, message.message_thread_id, earn_delta)
 
 
 async def register_julian_commands():
