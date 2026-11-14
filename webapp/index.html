@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>The Velvet Hour — Menu & Jukebox</title>
+  <title>The Velvet Hour — Menu, Mixology & Lounge</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     :root {
@@ -11,7 +11,6 @@
       --card: #1b1319;
       --gold: #dfb866;
       --gold-dim: rgba(223, 184, 102, 0.25);
-      --crimson: #7a1f34;
       --cream: #f5efe6;
       --muted: #a69c95;
     }
@@ -20,13 +19,13 @@
 
     header {
       background: linear-gradient(180deg, #2b121b 0%, var(--bg) 100%);
-      padding: 18px 16px 12px;
+      padding: 16px 16px 10px;
       border-bottom: 1px solid var(--gold-dim);
       position: sticky; top: 0; z-index: 10;
     }
-    .brand { font-size: 11px; letter-spacing: 2px; color: var(--gold); font-weight: 700; }
+    .brand { font-size: 10px; letter-spacing: 2px; color: var(--gold); font-weight: 700; }
     .title-row { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
-    h1 { font-size: 20px; font-weight: 700; }
+    h1 { font-size: 19px; font-weight: 700; }
     .badge-vc {
       background: rgba(223, 184, 102, 0.14);
       border: 1px solid var(--gold);
@@ -38,13 +37,14 @@
     }
 
     .tabs {
-      display: flex; gap: 8px; padding: 12px 16px;
-      background: var(--bg); position: sticky; top: 68px; z-index: 9;
+      display: flex; gap: 6px; padding: 10px 12px; overflow-x: auto;
+      background: var(--bg); position: sticky; top: 64px; z-index: 9;
     }
+    .tabs::-webkit-scrollbar { display: none; }
     .tab {
-      flex: 1; padding: 10px 6px; border-radius: 10px; border: 1px solid var(--gold-dim);
-      background: var(--card); color: var(--muted); font-size: 13px; font-weight: 600;
-      text-align: center; cursor: pointer; transition: 0.2s;
+      flex: 0 0 auto; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--gold-dim);
+      background: var(--card); color: var(--muted); font-size: 12px; font-weight: 600;
+      cursor: pointer; transition: 0.2s;
     }
     .tab.active {
       background: linear-gradient(135deg, #4b1725, #29141d);
@@ -54,7 +54,7 @@
     .section { display: none; padding: 4px 16px; }
     .section.active { display: block; }
     .sub-title {
-      font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px;
+      font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px;
       color: var(--gold); margin: 14px 0 8px; font-weight: 700;
     }
 
@@ -65,32 +65,32 @@
       justify-content: space-between;
     }
     .item-card.vip { border-color: rgba(223, 184, 102, 0.65); background: linear-gradient(160deg, #241914, #181116); }
-    .item-emoji { font-size: 26px; margin-bottom: 6px; }
-    .item-name { font-size: 14px; font-weight: 700; margin-bottom: 3px; }
+    .item-emoji { font-size: 24px; margin-bottom: 6px; }
+    .item-name { font-size: 13px; font-weight: 700; margin-bottom: 3px; }
     .item-desc { font-size: 11px; color: var(--muted); line-height: 1.35; margin-bottom: 10px; }
     .item-footer { display: flex; justify-content: space-between; align-items: center; }
-    .price { font-size: 12px; font-weight: 700; color: var(--gold); }
+    .price { font-size: 11px; font-weight: 700; color: var(--gold); }
 
     .btn-order {
       background: var(--gold); color: #140f0b; border: none; border-radius: 8px;
-      padding: 6px 12px; font-size: 12px; font-weight: 700; cursor: pointer;
+      padding: 6px 11px; font-size: 11px; font-weight: 700; cursor: pointer;
     }
-    .btn-order:disabled { opacity: 0.5; }
 
-    .jukebox-box {
+    .box-panel {
       background: var(--card); border: 1px solid var(--gold-dim);
-      border-radius: 14px; padding: 16px; margin-top: 10px;
+      border-radius: 14px; padding: 14px; margin-top: 10px;
     }
-    .input-field {
+    label { display: block; font-size: 12px; color: var(--gold); font-weight: 600; margin: 10px 0 6px; }
+    select, .input-field {
       width: 100%; background: #100b0f; border: 1px solid var(--gold-dim);
-      color: var(--cream); padding: 12px; border-radius: 10px; font-size: 14px;
-      margin: 10px 0 14px; outline: none;
+      color: var(--cream); padding: 11px; border-radius: 10px; font-size: 13px;
+      outline: none;
     }
-    .input-field:focus { border-color: var(--gold); }
+    select:focus, .input-field:focus { border-color: var(--gold); }
     .btn-full {
       width: 100%; background: linear-gradient(135deg, #dfb866, #b88c38);
-      color: #140f0b; border: none; padding: 13px; border-radius: 10px;
-      font-size: 14px; font-weight: 800; cursor: pointer;
+      color: #140f0b; border: none; padding: 12px; border-radius: 10px;
+      font-size: 13px; font-weight: 800; cursor: pointer; margin-top: 14px;
     }
 
     .toast {
@@ -112,36 +112,84 @@
 
   <div class="tabs">
     <div class="tab active" onclick="switchTab('drinks', this)">🍸 Minuman</div>
+    <div class="tab" onclick="switchTab('mixology', this)">🧪 Racik Koktail</div>
     <div class="tab" onclick="switchTab('food', this)">🍽️ Hidangan</div>
+    <div class="tab" onclick="switchTab('lapak', this)">🏪 Lapak</div>
     <div class="tab" onclick="switchTab('music', this)">🎶 Jukebox</div>
   </div>
 
-  <!-- TAB MINUMAN -->
+  <!-- TAB 1: MINUMAN -->
   <div id="tab-drinks" class="section active">
     <div class="sub-title">Signature & Classic Drinks (Gratis)</div>
     <div class="grid" id="grid-drinks-reg"></div>
-
     <div class="sub-title">✨ VIP Reserve Cellar (Gratis VIP / 15 VC)</div>
     <div class="grid" id="grid-drinks-vip"></div>
   </div>
 
-  <!-- TAB MAKANAN -->
+  <!-- TAB 2: RACIK KOKTAIL SENDIRI -->
+  <div id="tab-mixology" class="section">
+    <div class="box-panel">
+      <div style="font-size: 15px; font-weight: 700; color: var(--gold);">🧪 Custom Mixology Bar</div>
+      <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">
+        Pilih bahan racikanmu sendiri—Julian akan mengocoknya langsung di meja bar grup (Biaya: <b>10 VC</b>, Gratis VIP).
+      </div>
+
+      <label>1. Dasar Minuman (Base)</label>
+      <select id="mix-base">
+        <option value="Aged Bourbon Whisky">🥃 Aged Bourbon Whisky</option>
+        <option value="Botanical London Gin">🍸 Botanical London Gin</option>
+        <option value="Silver Agave Tequila">🌵 Silver Agave Tequila</option>
+        <option value="Dark Spiced Rum">🏴‍☠️ Dark Spiced Rum</option>
+        <option value="Sparkling Non-Alcoholic Tonic">🫧 Sparkling Tonic (Non-Alkohol)</option>
+      </select>
+
+      <label>2. Campuran Rasa (Mixer & Syrup)</label>
+      <select id="mix-syrup">
+        <option value="Blood Orange & Bitters">🍊 Blood Orange & Aromatic Bitters</option>
+        <option value="Velvet Rose & Lychee">🌹 Velvet Rose & Lychee Nectar</option>
+        <option value="Smoked Honey & Espresso">☕ Smoked Honey & Cold Espresso</option>
+        <option value="Crushed Mint & Yuzu Lime">🌿 Crushed Mint & Yuzu Lime</option>
+      </select>
+
+      <label>3. Hiasan Gelas (Garnish)</label>
+      <select id="mix-garnish">
+        <option value="Kulit Jeruk Bakar">🔥 Kulit Jeruk Bakar (Torched Peel)</option>
+        <option value="Batang Kayu Manis Asap">🪵 Batang Kayu Manis Asap</option>
+        <option value="Kelopak Mawar Merah">🥀 Kelopak Mawar Merah</option>
+        <option value="Ceri Hitam Maraschino">🍒 Ceri Hitam Maraschino</option>
+      </select>
+
+      <label>4. Beri Nama Koktailmu (Opsional)</label>
+      <input type="text" id="mix-name" class="input-field" placeholder="Contoh: Midnight Crimson" maxlength="32" />
+
+      <button class="btn-full" onclick="submitCustomMix()">🍸 Minta Julian Racik Sekarang</button>
+    </div>
+  </div>
+
+  <!-- TAB 3: MAKANAN -->
   <div id="tab-food" class="section">
     <div class="sub-title">Midnight Kitchen (Gratis)</div>
     <div class="grid" id="grid-food-reg"></div>
-
     <div class="sub-title">✨ Chef's VIP Gastronomy (Gratis VIP / 15 VC)</div>
     <div class="grid" id="grid-food-vip"></div>
   </div>
 
-  <!-- TAB JUKEBOX -->
+  <!-- TAB 4: ETALASE LAPAK PARTNER -->
+  <div id="tab-lapak" class="section">
+    <div class="sub-title">🏪 Etalase Item Lapak Partner Aktif</div>
+    <div class="grid" id="grid-lapak">
+      <div style="color: var(--muted); font-size: 12px;">Memuat katalog lapak...</div>
+    </div>
+  </div>
+
+  <!-- TAB 5: JUKEBOX -->
   <div id="tab-music" class="section">
-    <div class="jukebox-box">
+    <div class="box-panel">
       <div style="font-size: 15px; font-weight: 700; color: var(--gold);">🎧 Request Lagu ke Kaelen DJ</div>
       <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">
-        Lagu akan langsung masuk antrean & diumumkan oleh Kaelen di grup (Biaya: <b>10 VC</b>, Gratis untuk VIP).
+        Lagu langsung masuk antrean & diumumkan Kaelen di grup (Biaya: <b>10 VC</b>, Gratis VIP).
       </div>
-      <input type="text" id="song-input" class="input-field" placeholder="Contoh: Apocalypse - Cigarettes After Sex" />
+      <input type="text" id="song-input" class="input-field" style="margin-top: 12px;" placeholder="Contoh: Apocalypse - Cigarettes After Sex" />
       <button class="btn-full" onclick="submitSong()">🎶 Putar di Ruang Utama</button>
     </div>
   </div>
@@ -155,32 +203,32 @@
 
     const MENUS = {
       drinksReg: [
-        { code: "negroni", emoji: "🥃", name: "Classic Negroni", desc: "Gin, Campari & sweet vermouth dengan kulit jeruk.", price: 0 },
-        { code: "whisky", emoji: "🧊", name: "Smoked Whisky", desc: "Single malt bourbon dengan es batu kristal besar.", price: 0 },
-        { code: "mojito", emoji: "🌿", name: "Velvet Mojito", desc: "Daun mint segar, perasan lime & soda dingin.", price: 0 },
-        { code: "espresso", emoji: "☕", name: "Double Espresso", desc: "Ekstraksi kopi panggang gelap pekat.", price: 0 },
-        { code: "latte", emoji: "🥛", name: "Caramel Latte", desc: "Espresso lembut dengan steamed milk & karamel.", price: 0 },
-        { code: "mocktail", emoji: "🍹", name: "Crimson Sunset", desc: "Sirup delima, cranberry & tonic non-alkohol.", price: 0 },
+        { code: "negroni", emoji: "🥃", name: "Classic Negroni", desc: "Gin, Campari & sweet vermouth.", price: 0 },
+        { code: "whisky", emoji: "🧊", name: "Smoked Whisky", desc: "Bourbon dengan es batu kristal.", price: 0 },
+        { code: "mojito", emoji: "🌿", name: "Velvet Mojito", desc: "Daun mint, lime & soda dingin.", price: 0 },
+        { code: "espresso", emoji: "☕", name: "Double Espresso", desc: "Kopi panggang gelap pekat.", price: 0 },
+        { code: "latte", emoji: "🥛", name: "Caramel Latte", desc: "Espresso lembut & karamel.", price: 0 },
+        { code: "mocktail", emoji: "🍹", name: "Crimson Sunset", desc: "Delima, cranberry & tonic segar.", price: 0 },
       ],
       drinksVip: [
-        { code: "vip_dom", emoji: "🍾", name: "Dom Pérignon Vintage", desc: "Sampanye Prancis eksklusif dalam ember es.", price: 15, vip: true },
-        { code: "vip_blue", emoji: "💎", name: "Blue Label Reserve", desc: "Blended Scotch langka dengan aroma kayu ek.", price: 15, vip: true },
-        { code: "vip_absinthe", emoji: "🧪", name: "Emerald Absinthe", desc: "Disajikan dengan sendok gula karamel terbakar.", price: 15, vip: true },
-        { code: "vip_royal", emoji: "👑", name: "Velvet Royal Martini", desc: "Vodka premium dengan taburan edible gold leaf.", price: 15, vip: true },
+        { code: "vip_dom", emoji: "🍾", name: "Dom Pérignon Vintage", desc: "Sampanye Prancis eksklusif.", price: 15, vip: true },
+        { code: "vip_blue", emoji: "💎", name: "Blue Label Reserve", desc: "Scotch langka aroma kayu ek.", price: 15, vip: true },
+        { code: "vip_absinthe", emoji: "🧪", name: "Emerald Absinthe", desc: "Gula karamel terbakar.", price: 15, vip: true },
+        { code: "vip_royal", emoji: "👑", name: "Velvet Royal Martini", desc: "Vodka dengan edible gold leaf.", price: 15, vip: true },
       ],
       foodReg: [
-        { code: "steak", emoji: "🥩", name: "Ribeye Steak", desc: "Daging panggang medium-rare dengan saus lada hitam.", price: 0 },
-        { code: "pasta", emoji: "🍝", name: "Truffle Carbonara", desc: "Spaghetti creamy dengan jamur truffle & keju.", price: 0 },
-        { code: "fries", emoji: "🍟", name: "Truffle Parmesan Fries", desc: "Kentang goreng renyah tabur keju parmesan.", price: 0 },
-        { code: "platter", emoji: "🧀", name: "Charcuterie Board", desc: "Aneka keju artisan, buah kering & crackers.", price: 0 },
-        { code: "tiramisu", emoji: "🍰", name: "Espresso Tiramisu", desc: "Dessert klasik Italia berlapis krim mascarpone.", price: 0 },
-        { code: "croissant", emoji: "🥐", name: "Butter Croissant", desc: "Pastry hangat renyah berlapis mentega Prancis.", price: 0 },
+        { code: "steak", emoji: "🥩", name: "Ribeye Steak", desc: "Medium-rare saus lada hitam.", price: 0 },
+        { code: "pasta", emoji: "🍝", name: "Truffle Carbonara", desc: "Spaghetti jamur truffle & keju.", price: 0 },
+        { code: "fries", emoji: "🍟", name: "Truffle Fries", desc: "Kentang renyah tabur parmesan.", price: 0 },
+        { code: "platter", emoji: "🧀", name: "Charcuterie Board", desc: "Keju artisan, buah & crackers.", price: 0 },
+        { code: "tiramisu", emoji: "🍰", name: "Espresso Tiramisu", desc: "Krim mascarpone klasik Italia.", price: 0 },
+        { code: "croissant", emoji: "🥐", name: "Butter Croissant", desc: "Pastry hangat mentega Prancis.", price: 0 },
       ],
       foodVip: [
-        { code: "vip_a5", emoji: "🥩", name: "Miyazaki Wagyu A5", desc: "Potongan wagyu Jepang lumer dengan garam laut.", price: 15, vip: true },
-        { code: "vip_caviar", emoji: "🥄", name: "Beluga Caviar Blinis", desc: "Kaviar hitam premium dengan krim asam lembut.", price: 15, vip: true },
-        { code: "vip_lobster", emoji: "🦞", name: "Butter Poached Lobster", desc: "Lobster utuh panggang mentega bawang putih.", price: 15, vip: true },
-        { code: "vip_gold", emoji: "🍫", name: "24K Gold Dark Truffle", desc: "Cokelat ganache hitam berlapis emas murni.", price: 15, vip: true },
+        { code: "vip_a5", emoji: "🥩", name: "Miyazaki Wagyu A5", desc: "Wagyu Jepang lumer di mulut.", price: 15, vip: true },
+        { code: "vip_caviar", emoji: "🥄", name: "Beluga Caviar", desc: "Kaviar hitam & krim asam.", price: 15, vip: true },
+        { code: "vip_lobster", emoji: "🦞", name: "Poached Lobster", desc: "Lobster panggang mentega.", price: 15, vip: true },
+        { code: "vip_gold", emoji: "🍫", name: "24K Gold Truffle", desc: "Ganache hitam lapis emas.", price: 15, vip: true },
       ]
     };
 
@@ -242,67 +290,82 @@
           isVipUser = data.is_vip;
           document.getElementById("guest-balance").innerText = `${data.coins} VC ${data.is_vip ? '• VIP' : ''}`;
           renderAllMenus();
+          renderLapak(data.shop_items || []);
         }
       } catch (e) {
         renderAllMenus();
       }
     }
 
+    function renderLapak(items) {
+      const box = document.getElementById("grid-lapak");
+      if (!items.length) {
+        box.innerHTML = `<div style="color: var(--muted); font-size: 12px; grid-column: 1 / -1;">Belum ada item dijual di lapak partner saat ini.</div>`;
+        return;
+      }
+      box.innerHTML = items.map(it => `
+        <div class="item-card">
+          <div>
+            <div class="item-emoji">🛍️</div>
+            <div class="item-name">${it.title}</div>
+            <div class="item-desc">Toko: ${it.shop_name}</div>
+          </div>
+          <div class="item-footer">
+            <span class="price">${it.price_vc} VC</span>
+            <button class="btn-order" onclick="buyLapakItem(${it.id}, '${it.title.replace(/'/g, "\\'")}', ${it.price_vc})">Beli</button>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    async function buyLapakItem(itemId, title, price) {
+      tg.HapticFeedback.impactOccurred("medium");
+      showToast(`Membeli ${title}...`);
+      const res = await fetch("/api/order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initData: tg.initData, category: "lapak", item_id: itemId, item_name: title, price: price })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showToast("✅ Berhasil dibeli! Cek nota pembelian di PC Hans.");
+        setTimeout(() => tg.close(), 1000);
+      } else {
+        showToast("⚠️ " + (data.error || "Gagal membeli item."));
+      }
+    }
+
     async function placeOrder(category, code, itemName, price) {
       tg.HapticFeedback.impactOccurred("medium");
-      showToast(`Memesan ${itemName} ke Julian...`);
-      try {
-        const res = await fetch("/api/order", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            initData: tg.initData,
-            category: category,
-            code: code,
-            item_name: itemName,
-            price: price
-          })
-        });
-        const data = await res.json();
-        if (data.ok) {
-          document.getElementById("guest-balance").innerText = `${data.new_coins} VC ${isVipUser ? '• VIP' : ''}`;
-          showToast("✅ Pesanan dikirim! Julian sudah menyajikannya di grup.");
-          setTimeout(() => tg.close(), 900);
-        } else {
-          showToast("⚠️ " + (data.error || "Gagal memesan."));
-        }
-      } catch (err) {
-        showToast("⚠️ Koneksi ke bar terputus.");
+      showToast(`Julian sedang meracik ${itemName}...`);
+      const res = await fetch("/api/order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initData: tg.initData, category, code, item_name: itemName, price })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        document.getElementById("guest-balance").innerText = `${data.new_coins} VC ${isVipUser ? '• VIP' : ''}`;
+        showToast("✅ Pesanan dikirim ke meja bar grup!");
+        setTimeout(() => tg.close(), 800);
+      } else {
+        showToast("⚠️ " + (data.error || "Gagal memesan."));
       }
+    }
+
+    async function submitCustomMix() {
+      const base = document.getElementById("mix-base").value;
+      const syrup = document.getElementById("mix-syrup").value;
+      const garnish = document.getElementById("mix-garnish").value;
+      const customName = document.getElementById("mix-name").value.trim() || "Velvet Custom Signature";
+      const fullLabel = `${customName} (${base} + ${syrup}, garnish ${garnish})`;
+      await placeOrder("custom_mix", "mix", fullLabel, 10);
     }
 
     async function submitSong() {
       const song = document.getElementById("song-input").value.trim();
       if (song.length < 3) return showToast("⚠️ Ketik judul lagu terlebih dahulu.");
-      tg.HapticFeedback.impactOccurred("medium");
-      showToast("Mengirim request lagu ke Kaelen...");
-      try {
-        const res = await fetch("/api/order", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            initData: tg.initData,
-            category: "song",
-            code: "reqsong",
-            item_name: song,
-            price: 10
-          })
-        });
-        const data = await res.json();
-        if (data.ok) {
-          showToast("🎶 Lagu masuk antrean Kaelen di grup!");
-          setTimeout(() => tg.close(), 900);
-        } else {
-          showToast("⚠️ " + (data.error || "Gagal request lagu."));
-        }
-      } catch (err) {
-        showToast("⚠️ Koneksi gagal.");
-      }
+      await placeOrder("song", "reqsong", song, 10);
     }
 
     renderAllMenus();
