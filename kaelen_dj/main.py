@@ -52,7 +52,6 @@ API_HASH = str(getattr(cfg, "API_HASH", "") or os.environ.get("API_HASH", ""))
 bot = Bot(token=cfg.TOKEN_KAELEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Diinisialisasi di dalam main() agar terikat ke event loop yang sama dengan aiogram
 assistant: Client | None = None
 call_py: PyTgCalls | None = None
 _play_lock: asyncio.Lock | None = None
@@ -209,7 +208,38 @@ async def _send_kaelen_msg(text: str, thread_id: int | None = None, auto_delete:
             return None
 
 
-# --- AUTO-OPEN OS & AUTO-MUTE PENDENGAR (KECUALI OWNER & ASISTEN) ---
+# --- STRICT LISTEN-ONLY OS (HANYA OWNER & ASISTEN YANG BISA BICARA/UNMUTE) ---
+async def _mute_all_non_owners(call):
+    """Paksa mute semua peserta di OS kecuali OWNER_ID dan akun asisten."""
+    if not call:
+        return
+    try:
+        res = await assistant.invoke(
+            functions.phone.GetGroupParticipants(
+                call=call,
+                ids=[],
+                sources=[],
+                offset="",
+                limit=100,
+            )
+        )
+        for p in getattr(res, "participants", []):
+            peer_uid = getattr(getattr(p, "peer", None), "user_id", None)
+            if not peer_uid or peer_uid in (OWNER_ID, _assistant_user_id):
+                continue
+            if not getattr(p, "muted", True) or getattr(p, "can_self_unmute", False):
+                target_peer = await assistant.resolve_peer(peer_uid)
+                await assistant.invoke(
+                    functions.phone.EditGroupCallParticipant(
+                        call=call,
+                        participant=target_peer,
+                        muted=True,
+                    )
+                )
+    except Exception as e:
+        logger.debug("Mute sweep skip: %s", e)
+
+
 async def _ensure_voice_chat_open_and_muted():
     try:
         peer = await assistant.resolve_peer(GROUP_ID)
@@ -231,6 +261,7 @@ async def _ensure_voice_chat_open_and_muted():
 
         if call:
             try:
+                # Kunci setting OS agar semua anggota baru otomatis masuk dalam status muted (hanya dengar)
                 await assistant.invoke(
                     functions.phone.ToggleGroupCallSettings(
                         call=call,
@@ -239,6 +270,7 @@ async def _ensure_voice_chat_open_and_muted():
                 )
             except Exception:
                 pass
+            await _mute_all_non_owners(call)
         return call
     except Exception as e:
         logger.error("Gagal membuka/mengatur OS: %s", e)
@@ -262,6 +294,7 @@ async def _unmute_assistant_in_call(call):
 
 
 async def _enforce_os_listener_mute(client: Client, update, users, chats):
+    """Kunci real-time: setiap peserta selain Owner & Asisten yang mencoba unmute/raise hand langsung dipaksa mute."""
     if not isinstance(update, raw_types.UpdateGroupCallParticipants):
         return
     try:
@@ -269,13 +302,19 @@ async def _enforce_os_listener_mute(client: Client, update, users, chats):
             peer_uid = getattr(getattr(p, "peer", None), "user_id", None)
             if not peer_uid or peer_uid in (OWNER_ID, _assistant_user_id):
                 continue
-            if not getattr(p, "muted", True) or getattr(p, "can_self_unmute", False):
+
+            is_unmuted = not getattr(p, "muted", True)
+            can_unmute = getattr(p, "can_self_unmute", False)
+            raised_hand = getattr(p, "raise_hand_rating", None) is not None
+
+            if is_unmuted or can_unmute or raised_hand:
                 target_peer = await client.resolve_peer(peer_uid)
                 await client.invoke(
                     functions.phone.EditGroupCallParticipant(
                         call=update.call,
                         participant=target_peer,
                         muted=True,
+                        raise_hand=False,
                     )
                 )
     except Exception:
@@ -285,7 +324,6 @@ async def _enforce_os_listener_mute(client: Client, update, users, chats):
 # --- JALUR 1: MUSIC_VAULT_ID (GUDANG CHANNEL MUSIK) ---
 async def _search_music_vault(query: str) -> dict | None:
     if not MUSIC_VAULT_ID:
-        logger.warning("MUSIC_VAULT_ID belum terpasang!")
         return None
     try:
         async for msg in assistant.search_messages(chat_id=MUSIC_VAULT_ID, query=query, limit=10):
@@ -297,7 +335,6 @@ async def _search_music_vault(query: str) -> dict | None:
             downloaded_path = await assistant.download_media(msg, file_name=dest_path)
             if downloaded_path and os.path.exists(downloaded_path):
                 _cleanup_old_cache(keep_path=downloaded_path)
-                logger.info("Lagu ditemukan di MUSIC_VAULT_ID: %s", display_title)
                 return {
                     "title": display_title,
                     "stream_url": downloaded_path,
@@ -376,9 +413,8 @@ async def _fetch_via_tg_music_bot(query: str) -> dict | None:
                             message_id=target_audio_msg.id,
                         )
                         archived_link = getattr(copied, "link", "") or ""
-                        logger.info("Lagu '%s' disimpan ke MUSIC_VAULT_ID.", display_title)
-                    except Exception as arch_err:
-                        logger.debug("Skip simpan ke vault: %s", arch_err)
+                    except Exception:
+                        pass
 
                 dest_path = os.path.join(CACHE_DIR, f"tgbot_{target_audio_msg.id}_{int(datetime.utcnow().timestamp())}")
                 downloaded_path = await assistant.download_media(target_audio_msg, file_name=dest_path)
@@ -487,6 +523,7 @@ async def _play_next_in_queue():
             )
             await call_py.play(GROUP_ID, stream)
             await _unmute_assistant_in_call(call)
+            await _mute_all_non_owners(call)
 
             link_part = (
                 f'<a href="{html.escape(next_track.webpage_url)}">{html.escape(next_track.title)}</a>'
@@ -588,7 +625,6 @@ async def _poll_webapp_song_queue():
                 rname = r["requester_name"] or "Tamu Lounge"
                 title = r["song_title"]
                 tid = r["thread_id"]
-                logger.info("Sinkron request lagu dari Mini App: %s (oleh %s)", title, rname)
                 await enqueue_song_request(
                     query=title,
                     uid=uid,
@@ -817,7 +853,6 @@ async def main():
     await ensure_kaelen_schema()
     await register_kaelen_commands()
 
-    # Inisialisasi Pyrogram & PyTgCalls di dalam event loop aktif
     assistant = Client(
         name="kaelen_assistant",
         api_id=API_ID,
