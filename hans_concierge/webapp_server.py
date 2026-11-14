@@ -439,7 +439,6 @@ async def _ensure_webapp_user(conn, tg_user: dict):
 
 
 async def _get_custom_service_media(category: str) -> tuple[str, str]:
-    """Ambil GIF/foto kustom dari tabel gift_custom_media jika Owner mengaturnya."""
     key = f"menu_{category}"
     try:
         async with db.pool.acquire() as conn:
@@ -458,7 +457,7 @@ async def _serve_with_bartender_animation(
     is_vip: bool,
     thread_id: int | None = None,
 ):
-    vip_badge = "  •  👑 <b>VIP RESERVE</b>" if is_vip else ""
+    vip_tag = " 👑" if is_vip else ""
     send_kwargs = {"message_thread_id": thread_id} if thread_id else {}
 
     try:
@@ -473,23 +472,19 @@ async def _serve_with_bartender_animation(
             parse_mode=ParseMode.HTML,
             **send_kwargs,
         )
-        await asyncio.sleep(1.6)
+        await asyncio.sleep(1.5)
         try:
             await julian_bot.delete_message(cfg.GROUP_ID, prep_msg.message_id)
         except Exception:
             pass
 
-        title = "🧪 <b>CUSTOM MIXOLOGY  •  JULIAN</b>" if category == "custom_mix" else "🍸 <b>BARTENDER SERVICE  •  JULIAN</b>"
-        cat_label = "Signature Custom Racikan" if category == "custom_mix" else "Bar & Cellar Selection"
-        caption = (
-            f"{title}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"<i>Julian menggeser gelas kristal di atas meja bar mahoni menuju meja tamu.</i>\n\n"
-            f"<blockquote>• <b>Tamu:</b> {mention}{vip_badge}\n"
-            f"• <b>Pesanan:</b> <b>{item_name}</b>\n"
-            f"• <b>Kategori:</b> {cat_label}</blockquote>\n\n"
-            f"🥂 <i>\"Silakan dinikmati malam ini.\"</i>"
+        action_line = (
+            f"🧪 Julian meracik koktail kustom <b>{item_name}</b> dan menggesernya di atas meja bar untuk {mention}{vip_tag}."
+            if category == "custom_mix"
+            else f"🍸 Julian menggeser segelas <b>{item_name}</b> di atas meja bar mahoni menuju {mention}{vip_tag}."
         )
+        caption = f"{action_line}\n\n<i>\"Silakan dinikmati malam ini.\"</i>"
+
         media_src, mtype = await _get_custom_service_media(category)
         try:
             if mtype == "photo":
@@ -506,20 +501,15 @@ async def _serve_with_bartender_animation(
             parse_mode=ParseMode.HTML,
             **send_kwargs,
         )
-        await asyncio.sleep(1.8)
+        await asyncio.sleep(1.7)
         try:
             await julian_bot.delete_message(cfg.GROUP_ID, prep_msg.message_id)
         except Exception:
             pass
 
         caption = (
-            f"🍽️ <b>MIDNIGHT KITCHEN  •  JULIAN</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"<i>Hidangan hangat baru saja keluar dari dapur dan disajikan ke meja tamu.</i>\n\n"
-            f"<blockquote>• <b>Tamu:</b> {mention}{vip_badge}\n"
-            f"• <b>Hidangan:</b> <b>{item_name}</b>\n"
-            f"• <b>Kategori:</b> Lounge Gastronomy</blockquote>\n\n"
-            f"✨ <i>\"Selamat menikmati santapan malam Anda.\"</i>"
+            f"🍽️ Hidangan hangat <b>{item_name}</b> baru saja keluar dari dapur dan disajikan ke meja {mention}{vip_tag}.\n\n"
+            f"<i>\"Selamat menikmati santapan malam Anda.\"</i>"
         )
         media_src, mtype = await _get_custom_service_media("food")
         try:
@@ -608,10 +598,9 @@ async def handle_api_order(request: web.Request) -> web.Response:
         try:
             await hans_bot.send_message(
                 uid,
-                f"🧾 <b>NOTA PEMBELIAN LAPAK — {html.escape(item['shop_name'])}</b>\n\n"
-                f"• <b>Item:</b> {html.escape(item['title'])}\n"
-                f"• <b>Harga:</b> {price} VC\n"
-                f"• <b>Konten / Catatan:</b>\n<blockquote>{html.escape(item['content_text'] or '-')}</blockquote>",
+                f"🧾 <b>Nota Pembelian — {html.escape(item['shop_name'])}</b>\n"
+                f"• Item: <b>{html.escape(item['title'])}</b> ({price} VC)\n"
+                f"• Catatan: {html.escape(item['content_text'] or '-')}",
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
@@ -652,12 +641,7 @@ async def handle_api_order(request: web.Request) -> web.Response:
         await add_quest_progress(uid, "music_vibe", 1)
         send_kwargs = {"message_thread_id": thread_id} if thread_id else {}
         rp_text = (
-            f"🎶 <b>JUKEBOX REQUEST  •  KAELEN DJ</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"<i>Kaelen menyesuaikan piringan hitam di booth DJ sesuai permintaan tamu.</i>\n\n"
-            f"<blockquote>• <b>Tamu:</b> {mention}\n"
-            f"• <b>Lagu Diputar:</b> <b>{item_name}</b></blockquote>\n\n"
-            f"🎧 <i>\"Mengalun di seluruh penjuru lounge malam ini.\"</i>"
+            f"🎶 Kaelen memutar piringan hitam di booth DJ — <b>{item_name}</b> mengalun di seluruh ruangan atas permintaan {mention}."
         )
         media_src, mtype = await _get_custom_service_media("song")
         try:
